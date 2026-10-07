@@ -16,7 +16,7 @@ extern "C" {
 }
 
 static GSGLOBAL* gs;
-static GSTEXTURE texPig, texBox, texWheel;
+static GSTEXTURE texPig, texBox, texWheel, texFlag;
 static char padBuf[256] __attribute__((aligned(64)));
 static float kx = 1.f, ky = 1.f;   // virtual 640x448 -> pantalla real
 
@@ -130,6 +130,7 @@ int main(int, char**) {
     loadTex(texPig, SPR_PIG_PIX, SPR_PIG_W, SPR_PIG_H);
     loadTex(texBox, SPR_BOX_PIX, SPR_BOX_W, SPR_BOX_H);
     loadTex(texWheel, SPR_WHEEL_PIX, SPR_WHEEL_W, SPR_WHEEL_H);
+    loadTex(texFlag, SPR_FLAG_PIX, SPR_FLAG_W, SPR_FLAG_H);
 
     Game game;
     unsigned prev = 0;
@@ -149,6 +150,10 @@ int main(int, char**) {
                 if (btn & PAD_UP) { ay = -1; }
                 if (btn & PAD_DOWN) { ay = 1; }
                 in.stickX = ax; in.stickY = ay;
+                float lx = ((int)b.rjoy_h - 128) / 128.f, ly = ((int)b.rjoy_v - 128) / 128.f;
+                if (fabsf(lx) < 0.25f) { lx = 0; }
+                if (fabsf(ly) < 0.25f) { ly = 0; }
+                in.lookX = lx; in.lookY = ly;
                 unsigned edge = btn & ~prev;
                 in.pressX = edge & PAD_CROSS; in.pressSquare = edge & PAD_SQUARE;
                 in.pressTriangle = edge & PAD_TRIANGLE; in.pressCircle = edge & PAD_CIRCLE;
@@ -160,6 +165,10 @@ int main(int, char**) {
         // --- dibujo ---
         gsKit_clear(gs, rgba(0xB4, 0xDC, 0xFF, 0x80));   // alfa 0x80 = opaco; con 0x00 la pantalla no se borra y quedan estelas
         drawTerrain(game);
+        {   // bandera de meta (cuadros) parada en el suelo
+            float fx, fy; worldToScreen(game, L1_GOAL_X, L1_GOAL_Y - 57.f, fx, fy);
+            sprite(texFlag, fx, fy, texFlag.Width * ZOOM, texFlag.Height * ZOOM, 0.f);
+        }
         DrawItem items[16]; int n = game.drawList(items, 16);
         for (int i = 0; i < n; i++) {
             float sx, sy; worldToScreen(game, items[i].x, items[i].y, sx, sy);

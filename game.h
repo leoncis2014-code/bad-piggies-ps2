@@ -7,6 +7,7 @@ enum Mode { M_BUILD, M_PLAY, M_WIN, M_LOSE };
 
 struct GameInput {
     float stickX = 0, stickY = 0;          // -1..1 (cursor)
+    float lookX = 0, lookY = 0;            // -1..1 (camara libre, analogico derecho)
     bool pressX = false, pressSquare = false, pressTriangle = false, pressCircle = false; // flancos
 };
 

@@ -7,7 +7,7 @@
 static const float CELL = 31.f;           // px por celda (= 1 m)
 static const int   COLS = 3, ROWS = 2;
 static const float WHEEL_R = 0.355f;     // radio de la rueda (m)
-static const float WHEEL_DROP = 0.19f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
+static const float WHEEL_DROP = 0.25f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
 static const float TRAY_Y = 400.f, TRAY_X0 = 250.f, TRAY_DX = 70.f, TRAY_R = 28.f;
 
 struct Piece { int type; int col, row; };
@@ -21,7 +21,8 @@ public:
     Mode mode = M_BUILD;
     float cx = 320, cy = 224;
     float camx, camy;
-    float t = 0, stuck = 0;
+    float t = 0, stuck = 0, flip = 0;
+    float lookOX = 0, lookOY = 0;           // desplazamiento de la camara libre (px)
     b2World* world = nullptr;
     b2Body* chassis = nullptr;
     b2Body* wheels[ROWS*COLS];
@@ -47,7 +48,7 @@ public:
             for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) { cells[r][c] = -1; pig[r][c] = false; }
             left[P_PIG] = 1; left[P_BOX] = 3; left[P_WHEEL] = 2; sel = P_BOX;
         }
-        mode = M_BUILD; t = 0; stuck = 0;
+        mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0;
         camx = gx(); camy = gy() - 10.f;
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
@@ -86,9 +87,20 @@ public:
         nwheels = 0;
         for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
             int tp = cells[r][c];
-            if (tp != P_BOX) continue;
             float lx = (c - 1) * 1.f, ly = (r - 0.5f) * 1.f;
-            b2PolygonShape box; box.SetAsBox(0.46f, 0.46f, b2Vec2(lx, ly), 0.f);
+            if (tp != P_BOX) {
+                if (tp < 0 && pig[r][c]) {   // cerdito suelto, sin caja: es un blanco facil
+                    b2PolygonShape ps; ps.SetAsBox(0.40f, 0.40f, b2Vec2(lx, ly), 0.f);
+                    b2FixtureDef pf; pf.shape = &ps; pf.density = 0.8f; pf.friction = 0.2f; pf.restitution = 0.1f;
+                    chassis->CreateFixture(&pf);
+                }
+                continue;
+            }
+            // caja con las esquinas cortadas, para que no se enganche en los bordes del terreno
+            const float a = 0.46f, k = 0.18f;
+            b2Vec2 bv[8] = { b2Vec2(lx - a + k, ly - a), b2Vec2(lx + a - k, ly - a), b2Vec2(lx + a, ly - a + k), b2Vec2(lx + a, ly + a - k),
+                             b2Vec2(lx + a - k, ly + a), b2Vec2(lx - a + k, ly + a), b2Vec2(lx - a, ly + a - k), b2Vec2(lx - a, ly - a + k) };
+            b2PolygonShape box; box.Set(bv, 8);
             b2FixtureDef fd; fd.shape = &box; fd.density = 1.f; fd.friction = 0.5f; fd.restitution = 0.1f;
             chassis->CreateFixture(&fd);
             if (pig[r][c]) {
@@ -110,9 +122,12 @@ public:
             wheels[nwheels] = w; wheelCell[nwheels][0] = c; wheelCell[nwheels][1] = r; nwheels++;
         }
         // empujon inicial para salir de la plataforma
-        b2Vec2 kick(4.0f, 0.f);
-        chassis->SetLinearVelocity(kick);
-        for (int i = 0; i < nwheels; i++) wheels[i]->SetLinearVelocity(kick);
+        // arranque: solo con 2 o mas ruedas el vehiculo sale rodando; sin ruedas se queda parado y pierdes
+        if (nwheels >= 2) {
+            b2Vec2 kick(3.5f, 0.f);
+            chassis->SetLinearVelocity(kick);
+            for (int i = 0; i < nwheels; i++) wheels[i]->SetLinearVelocity(kick);
+        }
         mode = M_PLAY; t = 0; stuck = 0;
     }
 
@@ -133,7 +148,7 @@ public:
                 if (ti >= 0) sel = ti;
                 else if (cellAt(cx, cy, col, row) && left[sel] > 0) {
                     if (sel == P_PIG) {
-                        if (cells[row][col] == P_BOX && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; }
+                        if (cells[row][col] != P_WHEEL && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; }
                     } else if (cells[row][col] < 0) { cells[row][col] = sel; left[sel]--; }
                 }
             }
@@ -150,9 +165,13 @@ public:
         t += dt;
         b2Vec2 p = pigWorld();
         float px = p.x * PPM, py = p.y * PPM;
-        // camara suave
-        camx += (px - camx) * 0.08f; camy += (py - 20.f - camy) * 0.08f;
+        // camara suave + camara libre con el analogico derecho
+        lookOX += (in.lookX * 220.f - lookOX) * 0.12f; lookOY += (in.lookY * 140.f - lookOY) * 0.12f;
+        camx += (px + lookOX - camx) * 0.08f; camy += (py - 20.f + lookOY - camy) * 0.08f;
         if (px >= L1_GOAL_X) { mode = M_WIN; return; }
+        // volcado: boca abajo mas de 1.5 s = pierdes
+        flip = (cosf(chassis->GetAngle()) < -0.25f) ? flip + dt : 0.f;
+        if (flip > 1.5f) { mode = M_LOSE; return; }
         if (py > L1_DEATH_Y || t > 30.f) { mode = M_LOSE; return; }
         if (t > 4.f) {
             float sp = chassis->GetLinearVelocity().Length();
