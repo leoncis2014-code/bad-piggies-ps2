@@ -1,0 +1,21 @@
+name: Compilar para PS2
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ps2dev/ps2dev:latest
+    steps:
+      - name: Instalar herramientas
+        run: apk add --no-cache git make
+      - uses: actions/checkout@v4
+      - name: Descargar Box2D
+        run: git clone --depth 1 --branch v2.4.1 https://github.com/erincatto/box2d.git third_party/box2d
+      - name: Compilar
+        run: make -j2
+      - name: Guardar el programa
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpiggies-elf
+          path: bpiggies.elf
