@@ -28,6 +28,7 @@ public:
     void camera(float& x, float& y) const;     // centro de la camara en pixeles de nivel
     int  selected() const;
     int  remaining(int type) const;
+    bool cellHasPig(int col, int row) const;
     bool cellPiece(int col, int row, int& type) const;   // fila 0 arriba, fila 1 abajo
     void cellScreen(int col, int row, float& sx, float& sy) const;
     void traySlot(int i, float& sx, float& sy) const;     // centro del icono de bandeja en pantalla

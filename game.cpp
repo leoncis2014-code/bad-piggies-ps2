@@ -7,14 +7,15 @@
 static const float CELL = 31.f;           // px por celda (= 1 m)
 static const int   COLS = 3, ROWS = 2;
 static const float WHEEL_R = 0.355f;     // radio de la rueda (m)
-static const float WHEEL_DROP = 0.145f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
+static const float WHEEL_DROP = 0.19f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
 static const float TRAY_Y = 400.f, TRAY_X0 = 250.f, TRAY_DX = 70.f, TRAY_R = 28.f;
 
 struct Piece { int type; int col, row; };
 
 class GameImpl {
 public:
-    int cells[ROWS][COLS];
+    int cells[ROWS][COLS];      // base: -1 vacio, P_BOX o P_WHEEL
+    bool pig[ROWS][COLS];       // cerdito colocado dentro de una caja
     int left[P_COUNT];
     int sel = P_BOX;
     Mode mode = M_BUILD;
@@ -43,7 +44,7 @@ public:
     void reset(bool full) {
         delete world; world = nullptr; chassis = nullptr; nwheels = 0;
         if (full) {
-            for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) cells[r][c] = -1;
+            for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) { cells[r][c] = -1; pig[r][c] = false; }
             left[P_PIG] = 1; left[P_BOX] = 3; left[P_WHEEL] = 2; sel = P_BOX;
         }
         mode = M_BUILD; t = 0; stuck = 0;
@@ -52,7 +53,7 @@ public:
     }
 
     bool hasPig() const {
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) if (cells[r][c] == P_PIG) return true;
+        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) if (pig[r][c]) return true;
         return false;
     }
 
@@ -85,14 +86,16 @@ public:
         nwheels = 0;
         for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
             int tp = cells[r][c];
-            if (tp < 0) continue;
+            if (tp != P_BOX) continue;
             float lx = (c - 1) * 1.f, ly = (r - 0.5f) * 1.f;
-            if (tp == P_WHEEL) continue;
-            b2PolygonShape box; float half = (tp == P_PIG) ? 0.40f : 0.48f;
-            box.SetAsBox(half, half, b2Vec2(lx, ly), 0.f);
-            b2FixtureDef fd; fd.shape = &box; fd.density = (tp == P_PIG) ? 0.8f : 1.f;
-            fd.friction = 0.5f; fd.restitution = 0.1f;
+            b2PolygonShape box; box.SetAsBox(0.46f, 0.46f, b2Vec2(lx, ly), 0.f);
+            b2FixtureDef fd; fd.shape = &box; fd.density = 1.f; fd.friction = 0.5f; fd.restitution = 0.1f;
             chassis->CreateFixture(&fd);
+            if (pig[r][c]) {
+                b2PolygonShape ps; ps.SetAsBox(0.28f, 0.28f, b2Vec2(lx, ly), 0.f);
+                b2FixtureDef pf; pf.shape = &ps; pf.density = 0.8f; pf.friction = 0.2f; pf.restitution = 0.1f;
+                chassis->CreateFixture(&pf);
+            }
         }
         for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
             if (cells[r][c] != P_WHEEL) continue;
@@ -115,7 +118,7 @@ public:
 
     b2Vec2 pigWorld() const {
         for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++)
-            if (cells[r][c] == P_PIG) return chassis->GetWorldPoint(b2Vec2((c - 1) * 1.f, (r - 0.5f) * 1.f));
+            if (pig[r][c]) return chassis->GetWorldPoint(b2Vec2((c - 1) * 1.f, (r - 0.5f) * 1.f));
         return chassis->GetPosition();
     }
 
@@ -128,9 +131,16 @@ public:
             if (in.pressX) {
                 int ti = trayAt(cx, cy);
                 if (ti >= 0) sel = ti;
-                else if (cellAt(cx, cy, col, row) && cells[row][col] < 0 && left[sel] > 0) { cells[row][col] = sel; left[sel]--; }
+                else if (cellAt(cx, cy, col, row) && left[sel] > 0) {
+                    if (sel == P_PIG) {
+                        if (cells[row][col] == P_BOX && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; }
+                    } else if (cells[row][col] < 0) { cells[row][col] = sel; left[sel]--; }
+                }
             }
-            if (in.pressSquare && cellAt(cx, cy, col, row) && cells[row][col] >= 0) { left[cells[row][col]]++; cells[row][col] = -1; }
+            if (in.pressSquare && cellAt(cx, cy, col, row)) {
+                if (pig[row][col]) { pig[row][col] = false; left[P_PIG]++; }
+                else if (cells[row][col] >= 0) { left[cells[row][col]]++; cells[row][col] = -1; }
+            }
             if (in.pressTriangle && hasPig()) startPlay();
             return;
         }
@@ -143,31 +153,44 @@ public:
         // camara suave
         camx += (px - camx) * 0.08f; camy += (py - 20.f - camy) * 0.08f;
         if (px >= L1_GOAL_X) { mode = M_WIN; return; }
-        if (py > L1_DEATH_Y || t > 45.f) { mode = M_LOSE; return; }
+        if (py > L1_DEATH_Y || t > 30.f) { mode = M_LOSE; return; }
         if (t > 4.f) {
             float sp = chassis->GetLinearVelocity().Length();
-            stuck = (sp < 0.05f) ? stuck + dt : 0.f;
-            if (stuck > 3.f) mode = M_LOSE;
+            stuck = (sp < 0.3f) ? stuck + dt : 0.f;
+            if (stuck > 2.5f) mode = M_LOSE;
         }
     }
 
     int draw(DrawItem* out, int max) const {
         int n = 0;
-        if (mode == M_BUILD || !chassis) {
-            for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++)
-                if (cells[r][c] >= 0 && n < max) { out[n].type = cells[r][c]; out[n].x = cellX(c); out[n].y = cellY(r) + (cells[r][c] == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = 0; n++; }
-            return n;
-        }
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
-            int tp = cells[r][c];
-            if (tp < 0 || tp == P_WHEEL || n >= max) continue;
-            b2Vec2 w = chassis->GetWorldPoint(b2Vec2((c - 1) * 1.f, (r - 0.5f) * 1.f));
-            out[n].type = tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle(); n++;
-        }
-        for (int i = 0; i < nwheels && n < max; i++) {
-            b2Vec2 w = wheels[i]->GetPosition();
-            out[n].type = P_WHEEL; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = wheels[i]->GetAngle(); n++;
-        }
+        bool playing = (mode != M_BUILD) && chassis;
+        // pasada 1: cajas y ruedas (build) | pasada 2: cerditos
+        for (int pass = 0; pass < 2; pass++)
+            for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+                if (n >= max) break;
+                float lx = (c - 1) * 1.f, ly = (r - 0.5f) * 1.f;
+                if (pass == 0) {
+                    int tp = cells[r][c];
+                    if (tp < 0) continue;
+                    if (playing) {
+                        if (tp == P_WHEEL) continue;                  // las ruedas se dibujan aparte
+                        b2Vec2 w = chassis->GetWorldPoint(b2Vec2(lx, ly));
+                        out[n].type = tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle(); n++;
+                    } else {
+                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + (tp == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = 0; n++;
+                    }
+                } else if (pig[r][c]) {
+                    if (playing) {
+                        b2Vec2 w = chassis->GetWorldPoint(b2Vec2(lx, ly));
+                        out[n].type = P_PIG; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle(); n++;
+                    } else { out[n].type = P_PIG; out[n].x = cellX(c); out[n].y = cellY(r); out[n].angle = 0; n++; }
+                }
+            }
+        if (playing)
+            for (int i = 0; i < nwheels && n < max; i++) {
+                b2Vec2 w = wheels[i]->GetPosition();
+                out[n].type = P_WHEEL; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = wheels[i]->GetAngle(); n++;
+            }
         return n;
     }
 };
@@ -183,6 +206,7 @@ void Game::camera(float& x, float& y) const { x = g->camx; y = g->camy; }
 int Game::selected() const { return g->sel; }
 int Game::remaining(int t) const { return g->left[t]; }
 bool Game::cellPiece(int col, int row, int& type) const { type = g->cells[row][col]; return type >= 0; }
+bool Game::cellHasPig(int col, int row) const { return g->pig[row][col]; }
 void Game::cellScreen(int col, int row, float& sx, float& sy) const { g->toScreen(g->cellX(col), g->cellY(row), sx, sy); }
 void Game::traySlot(int i, float& sx, float& sy) const { sx = TRAY_X0 + i * TRAY_DX; sy = TRAY_Y; }
 float Game::time() const { return g->t; }

@@ -47,6 +47,6 @@ static const unsigned short L1_TRIS[][3] = {
   {17,18,19}
 };
 static const float L1_GRID_X0 = 300.0f;      // centro de la columna 0 (px)
-static const float L1_GRID_YB = 148.9f;      // centro de la fila inferior (px)
-static const float L1_GOAL_X = 780.0f;     // meta aproximada (px)
+static const float L1_GRID_YB = 147.4f;      // centro de la fila inferior (px)
+static const float L1_GOAL_X = 700.0f;     // meta aproximada (px)
 static const float L1_DEATH_Y = 560.0f;    // por debajo de esto se pierde (px)

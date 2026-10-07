@@ -158,12 +158,12 @@ int main(int, char**) {
         game.update(dt, in);
 
         // --- dibujo ---
-        gsKit_clear(gs, rgba(0xB4, 0xDC, 0xFF, 0x00));
+        gsKit_clear(gs, rgba(0xB4, 0xDC, 0xFF, 0x80));   // alfa 0x80 = opaco; con 0x00 la pantalla no se borra y quedan estelas
         drawTerrain(game);
         DrawItem items[16]; int n = game.drawList(items, 16);
         for (int i = 0; i < n; i++) {
             float sx, sy; worldToScreen(game, items[i].x, items[i].y, sx, sy);
-            spriteOf(items[i].type, sx, sy, 1.f, items[i].angle);
+            spriteOf(items[i].type, sx, sy, items[i].type == P_PIG ? 0.8f : 1.f, items[i].angle);
         }
         drawUI(game);
         gsKit_queue_exec(gs);
