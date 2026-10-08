@@ -24,7 +24,11 @@ extern "C" {
 #include "sounds.h"
 }
 
-enum Screen { S_TITLE, S_SELECT, S_GAME };
+enum Screen { S_TITLE, S_WORLDS, S_SELECT, S_GAME };
+
+static const char* WORLD_L1[4] = { "Ground Hog", "When Pigs", "Flight in", "Sandbox" };
+static const char* WORLD_L2[4] = { "Day", "Fly", "the Night", "" };
+static const char* WORLD_NAME[4] = { "Ground Hog Day", "When Pigs Fly", "Flight in the Night", "Sandbox" };
 
 static GSGLOBAL* gs;
 static GSTEXTURE texPig, texBox, texWheel, texFlag, texFontS, texFontB;
@@ -129,6 +133,8 @@ static void textLeft(float x, float y, const char* s, float scale, int r, int g,
 static bool audioOK = false;
 static const SoundData* curSnd = NULL;
 static int sndPos = 0;
+static int idleAvail = 0;      // espacio libre del buffer de audio cuando esta vacio
+static int tailFrames = -1;    // cuadros transcurridos desde que se entrego el ultimo trozo (-1 = nada pendiente)
 static void audioInit() {
     SifLoadModule("rom0:LIBSD", 0, NULL);
     int ret = 0;
@@ -138,21 +144,29 @@ static void audioInit() {
     audsrv_fmt_t fmt; fmt.freq = 22050; fmt.bits = 16; fmt.channels = 1;
     if (audsrv_set_format(&fmt) != 0) return;
     audsrv_set_volume(MAX_VOLUME);
+    idleAvail = audsrv_available();
     audioOK = true;
 }
 static void sndPlay(int id) {
     if (!audioOK) return;
     audsrv_stop_audio();
-    curSnd = &SOUNDS[id]; sndPos = 0;
+    curSnd = &SOUNDS[id]; sndPos = 0; tailFrames = -1;
 }
 static void sndPump() {                        // entrega el sonido en trozos, una vez por cuadro
-    if (!audioOK || !curSnd) return;
-    int avail = audsrv_available(), remain = (curSnd->samples - sndPos) * 2;
-    int n = avail < remain ? avail : remain;
-    if (n > 4096) n = 4096;
-    n &= ~1;
-    if (n > 0) { audsrv_play_audio((const char*)(curSnd->data + sndPos), n); sndPos += n / 2; }
-    if (sndPos >= curSnd->samples) curSnd = NULL;
+    if (!audioOK) return;
+    if (curSnd) {
+        int avail = audsrv_available(), remain = (curSnd->samples - sndPos) * 2;
+        int n = avail < remain ? avail : remain;
+        if (n > 4096) n = 4096;
+        n &= ~1;
+        if (n > 0) { audsrv_play_audio((const char*)(curSnd->data + sndPos), n); sndPos += n / 2; }
+        if (sndPos >= curSnd->samples) { curSnd = NULL; tailFrames = 0; }
+        return;
+    }
+    if (tailFrames >= 0) {                     // todo entregado: esperar a que el buffer se vacie y cortar el audio
+        tailFrames++;
+        if (audsrv_available() >= idleAvail - 64 || tailFrames > 300) { audsrv_stop_audio(); tailFrames = -1; }
+    }
 }
 #else
 static void audioInit() {}
@@ -268,7 +282,10 @@ int main(int, char**) {
     Game game;
     Screen screen = S_TITLE;
     int sel = 0;                 // nivel elegido en el selector (0..14)
+    int wsel = 0;                // mundo elegido (0..3)
     float msgTimer = 0.f;        // aviso "aguarde a la siguiente actualizacion"
+    bool keepMsg = false;        // conservar el aviso al cambiar de pantalla
+    Screen prevScreen = S_TITLE;
     float clock = 0.f;
     Pad pad;
     for (;;) {
@@ -301,7 +318,15 @@ int main(int, char**) {
 
         // ---------------- logica por pantalla ----------------
         if (screen == S_TITLE) {
-            if (pX || pStart) { sndPlay(SND_CLICK); screen = S_SELECT; }
+            if (pX || pStart) { sndPlay(SND_CLICK); screen = S_WORLDS; }
+        } else if (screen == S_WORLDS) {
+            if (pad.eL && wsel > 0) { wsel--; sndPlay(SND_CLICK); }
+            if (pad.eR && wsel < 3) { wsel++; sndPlay(SND_CLICK); }
+            if (pO) { sndPlay(SND_CLICK); screen = S_TITLE; }
+            if (pX) {
+                if (wsel == 0) { sndPlay(SND_CLICK); screen = S_SELECT; }
+                else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
+            }
         } else if (screen == S_SELECT) {
             int col = sel % 5, row = sel / 5;
             bool moved = false;
@@ -310,7 +335,7 @@ int main(int, char**) {
             if (pad.eU && row > 0) { sel -= 5; moved = true; }
             if (pad.eD && row < 2) { sel += 5; moved = true; }
             if (moved) sndPlay(SND_CLICK);
-            if (pO) { sndPlay(SND_CLICK); screen = S_TITLE; }
+            if (pO) { sndPlay(SND_CLICK); screen = S_WORLDS; }
             if (pX) {
                 if (game.loadLevel(sel)) { sndPlay(SND_CLICK); screen = S_GAME; }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
@@ -321,7 +346,7 @@ int main(int, char**) {
             else if (game.mode() == M_WIN && pX) {
                 int next = game.levelIndex() + 1;
                 if (game.loadLevel(next)) { sndPlay(SND_CLICK); }
-                else { sel = next < 15 ? next : 14; screen = S_SELECT; msgTimer = 3.0f; }
+                else { sel = next < 15 ? next : 14; screen = S_SELECT; msgTimer = 3.0f; keepMsg = true; }
                 handled = true;
             }
             if (!handled) {
@@ -337,6 +362,7 @@ int main(int, char**) {
                 else if (ev & EV_CLICK) sndPlay(SND_CLICK);
             }
         }
+        if (screen != prevScreen) { if (!keepMsg) msgTimer = 0.f; keepMsg = false; prevScreen = screen; }
         sndPump();
 
         // ---------------- dibujo ----------------
@@ -349,12 +375,46 @@ int main(int, char**) {
             drawVehicleDemo(320, 228, 1.6f, sinf(clock * 2.f) * 4.f);
             if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 338, "Pulsá X para jugar", 1.5f, 255, 255, 255);
             textCentered(false, 320, 414, "Port no oficial - versión de prueba", 0.7f, 255, 255, 255);
+        } else if (screen == S_WORLDS) {
+            rect(0, 340, SCREEN_W, SCREEN_H, rgba(0x4C, 0xA8, 0x32, 0x80));
+            textCentered(false, 320, 22, "Elegí un mundo", 1.5f, 255, 255, 255);
+            static const int PC[4][3] = { { 0x6C, 0xBF, 0x3A }, { 0xE0, 0xA0, 0x20 }, { 0x4A, 0x8C, 0xE0 }, { 0xD0, 0xA0, 0x60 } };
+            for (int i = 0; i < 4; i++) {
+                float x1 = 42 + i * 144, y1 = 80, x2 = x1 + 124, y2 = 330;
+                bool ok = (i == 0);
+                rect(x1, y1, x2, y2, rgba(PC[i][0], PC[i][1], PC[i][2], 0x80));
+                frameRect(x1, y1, x2, y2, 4.f, rgba(0xD8, 0xDC, 0xE0, 0x80));
+                textCentered(false, (x1 + x2) * 0.5f, y1 + 16, WORLD_L1[i], 0.78f, 255, 255, 255);
+                if (WORLD_L2[i][0]) textCentered(false, (x1 + x2) * 0.5f, y1 + 42, WORLD_L2[i], 1.1f, 255, 255, 255);
+                if (ok) {
+                    spriteOf(P_PIG, (x1 + x2) * 0.5f, y1 + 140 + sinf(clock * 3.f) * 3.f, 1.6f, 0.f);
+                    textCentered(false, (x1 + x2) * 0.5f, y2 - 40, "Disponible", 0.85f, 255, 255, 255);
+                } else {
+                    rect(x1, y1, x2, y2, rgba(0x10, 0x20, 0x30, 0x40));        // velo oscuro
+                    float cx = (x1 + x2) * 0.5f, cy = y1 + 140;                  // candado
+                    frameRect(cx - 14, cy - 34, cx + 14, cy - 4, 5.f, rgba(0xC0, 0xC4, 0xC8, 0x80));
+                    rect(cx - 24, cy - 8, cx + 24, cy + 30, rgba(0xF0, 0xC8, 0x20, 0x80));
+                    rect(cx - 4, cy + 6, cx + 4, cy + 20, rgba(0x60, 0x48, 0x10, 0x80));
+                    textCentered(false, cx, y2 - 40, "Bloqueado", 0.85f, 230, 230, 230);
+                }
+                if (i == wsel) {
+                    float pulse = 3.f + 2.f * sinf(clock * 6.f);
+                    frameRect(x1 - pulse, y1 - pulse, x2 + pulse, y2 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                }
+            }
+            textCentered(false, 320, 376, "X: elegir     Círculo: volver", 0.9f, 255, 255, 255);
+            if (msgTimer > 0) {
+                rect(40, 170, 600, 250, rgba(0x10, 0x20, 0x30, 0x70));
+                frameRect(40, 170, 600, 250, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                textCentered(false, 320, 190, "Aguarde a la sig. actualización", 1.15f, 255, 240, 120);
+            }
         } else if (screen == S_SELECT) {
             rect(0, 330, SCREEN_W, SCREEN_H, rgba(0x4C, 0xA8, 0x32, 0x80));
-            textCentered(false, 320, 22, "Elegí un nivel", 1.5f, 255, 255, 255);
+            textCentered(false, 320, 6, WORLD_NAME[0], 1.15f, 255, 240, 120);
+            textCentered(false, 320, 48, "Elegí un nivel", 0.8f, 255, 255, 255);
             for (int i = 0; i < 15; i++) {
                 int col = i % 5, row = i / 5;
-                float x1 = 62 + col * 108, y1 = 70 + row * 104, x2 = x1 + 84, y2 = y1 + 84;
+                float x1 = 62 + col * 108, y1 = 82 + row * 100, x2 = x1 + 84, y2 = y1 + 84;
                 bool ok = i < Game::levelCount();
                 rect(x1, y1, x2, y2, ok ? rgba(0x6C, 0xBF, 0x3A, 0x80) : rgba(0x3E, 0x6A, 0x3A, 0x80));
                 frameRect(x1, y1, x2, y2, 3.f, ok ? rgba(0x3A, 0x7A, 0x22, 0x80) : rgba(0x2A, 0x4A, 0x28, 0x80));
