@@ -1,5 +1,5 @@
 #include "game.h"
-#include "level1_data.h"
+#include "levels_data.h"
 #include <box2d/box2d.h>
 #include <math.h>
 #include <string.h>
@@ -8,7 +8,7 @@ static const float CELL = 31.f;           // px por celda (= 1 m)
 static const int   COLS = 3, ROWS = 2;
 static const float WHEEL_R = 0.355f;     // radio de la rueda (m)
 static const float WHEEL_DROP = 0.25f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
-static const float TRAY_Y = 400.f, TRAY_X0 = 250.f, TRAY_DX = 70.f, TRAY_R = 28.f;
+static const float TRAY_Y = 380.f, TRAY_X0 = 250.f, TRAY_DX = 70.f, TRAY_R = 28.f;
 
 struct Piece { int type; int col, row; };
 
@@ -23,6 +23,9 @@ public:
     float camx, camy;
     float t = 0, stuck = 0, flip = 0;
     float lookOX = 0, lookOY = 0;           // desplazamiento de la camara libre (px)
+    const LevelData* L = &LEVELS[0];
+    int levelIdx = 0;
+    unsigned events = 0;
     b2World* world = nullptr;
     b2Body* chassis = nullptr;
     b2Body* wheels[ROWS*COLS];
@@ -32,10 +35,10 @@ public:
     GameImpl() { memset(wheels, 0, sizeof(wheels)); reset(true); }
     ~GameImpl() { delete world; }
 
-    float gx() const { return L1_GRID_X0 + CELL; }                 // centro horizontal de la rejilla (px)
-    float gy() const { return L1_GRID_YB - CELL * 0.5f; }          // centro vertical (px)
-    float cellX(int col) const { return L1_GRID_X0 + col * CELL; }
-    float cellY(int row) const { return L1_GRID_YB - (ROWS - 1 - row) * CELL; }
+    float gx() const { return L->gridX0 + CELL; }                 // centro horizontal de la rejilla (px)
+    float gy() const { return L->gridYB - CELL * 0.5f; }          // centro vertical (px)
+    float cellX(int col) const { return L->gridX0 + col * CELL; }
+    float cellY(int row) const { return L->gridYB - (ROWS - 1 - row) * CELL; }
 
     void toScreen(float wx, float wy, float& sx, float& sy) const {
         sx = (wx - camx) * ZOOM + SCREEN_W * 0.5f;
@@ -75,11 +78,15 @@ public:
         world = new b2World(b2Vec2(0.f, 10.f));
         // terreno
         b2BodyDef gd; b2Body* ground = world->CreateBody(&gd);
-        b2Vec2 v[64]; int n = L1_NPTS < 64 ? L1_NPTS : 64;
-        for (int i = 0; i < n; i++) v[i].Set(L1_PTS[i][0] / PPM, L1_PTS[i][1] / PPM);
-        b2ChainShape chain; chain.CreateLoop(v, n);
-        b2FixtureDef gf; gf.shape = &chain; gf.friction = 0.6f; gf.restitution = 0.1f;
-        ground->CreateFixture(&gf);
+        for (int ri = 0; ri < L->nrings; ri++) {
+            int a = L->ringStart[ri], b = L->ringStart[ri + 1], n = b - a;
+            if (n < 3) continue;
+            std::vector<b2Vec2> v(n);
+            for (int i = 0; i < n; i++) v[i].Set(L->pts[a + i][0] / PPM, L->pts[a + i][1] / PPM);
+            b2ChainShape chain; chain.CreateLoop(&v[0], n);
+            b2FixtureDef gf; gf.shape = &chain; gf.friction = 0.6f; gf.restitution = 0.1f;
+            ground->CreateFixture(&gf);
+        }
         // chasis: una sola pieza rigida con las cajas y el cerdito
         b2BodyDef cd; cd.type = b2_dynamicBody; cd.position.Set(gx() / PPM, gy() / PPM);
         cd.allowSleep = false;
@@ -128,7 +135,7 @@ public:
             chassis->SetLinearVelocity(kick);
             for (int i = 0; i < nwheels; i++) wheels[i]->SetLinearVelocity(kick);
         }
-        mode = M_PLAY; t = 0; stuck = 0;
+        mode = M_PLAY; t = 0; stuck = 0; events |= EV_GO;
     }
 
     b2Vec2 pigWorld() const {
@@ -145,16 +152,16 @@ public:
             int col, row;
             if (in.pressX) {
                 int ti = trayAt(cx, cy);
-                if (ti >= 0) sel = ti;
+                if (ti >= 0) { sel = ti; events |= EV_CLICK; }
                 else if (cellAt(cx, cy, col, row) && left[sel] > 0) {
                     if (sel == P_PIG) {
-                        if (cells[row][col] != P_WHEEL && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; }
-                    } else if (cells[row][col] < 0) { cells[row][col] = sel; left[sel]--; }
+                        if (cells[row][col] != P_WHEEL && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; events |= EV_PLACE; }
+                    } else if (cells[row][col] < 0) { cells[row][col] = sel; left[sel]--; events |= EV_PLACE; }
                 }
             }
             if (in.pressSquare && cellAt(cx, cy, col, row)) {
-                if (pig[row][col]) { pig[row][col] = false; left[P_PIG]++; }
-                else if (cells[row][col] >= 0) { left[cells[row][col]]++; cells[row][col] = -1; }
+                if (pig[row][col]) { pig[row][col] = false; left[P_PIG]++; events |= EV_CLICK; }
+                else if (cells[row][col] >= 0) { left[cells[row][col]]++; cells[row][col] = -1; events |= EV_CLICK; }
             }
             if (in.pressTriangle && hasPig()) startPlay();
             return;
@@ -168,15 +175,15 @@ public:
         // camara suave + camara libre con el analogico derecho
         lookOX += (in.lookX * 220.f - lookOX) * 0.12f; lookOY += (in.lookY * 140.f - lookOY) * 0.12f;
         camx += (px + lookOX - camx) * 0.08f; camy += (py - 20.f + lookOY - camy) * 0.08f;
-        if (px >= L1_GOAL_X) { mode = M_WIN; return; }
+        if (px >= L->goalX) { mode = M_WIN; events |= EV_WIN; return; }
         // volcado: boca abajo mas de 1.5 s = pierdes
         flip = (cosf(chassis->GetAngle()) < -0.25f) ? flip + dt : 0.f;
-        if (flip > 1.5f) { mode = M_LOSE; return; }
-        if (py > L1_DEATH_Y || t > 30.f) { mode = M_LOSE; return; }
+        if (flip > 1.5f) { mode = M_LOSE; events |= EV_LOSE; return; }
+        if (py > L->deathY || t > 30.f) { mode = M_LOSE; events |= EV_LOSE; return; }
         if (t > 4.f) {
             float sp = chassis->GetLinearVelocity().Length();
             stuck = (sp < 0.3f) ? stuck + dt : 0.f;
-            if (stuck > 2.5f) mode = M_LOSE;
+            if (stuck > 2.5f) { mode = M_LOSE; events |= EV_LOSE; }
         }
     }
 
@@ -217,6 +224,11 @@ public:
 Game::Game() { g = new GameImpl(); }
 Game::~Game() { delete g; }
 void Game::reset() { g->reset(true); }
+bool Game::loadLevel(int i) { if (i < 0 || i >= NUM_LEVELS_DATA) return false; g->levelIdx = i; g->L = &LEVELS[i]; g->reset(true); return true; }
+int Game::levelIndex() const { return g->levelIdx; }
+int Game::levelCount() { return NUM_LEVELS_DATA; }
+const LevelData& Game::levelData() const { return *g->L; }
+unsigned Game::takeEvents() { unsigned e = g->events; g->events = 0; return e; }
 void Game::update(float dt, const GameInput& in) { g->update(dt, in); }
 int Game::drawList(DrawItem* out, int max) const { return g->draw(out, max); }
 Mode Game::mode() const { return g->mode; }
