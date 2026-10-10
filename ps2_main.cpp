@@ -18,6 +18,13 @@ extern unsigned int size_audsrv_irx;
 }
 #endif
 #include "game.h"
+#include "decor.h"
+extern "C" {
+extern unsigned char decor_raw[]; extern unsigned int size_decor_raw;
+extern unsigned char music_main[]; extern unsigned int size_music_main;
+extern unsigned char music_hai[]; extern unsigned int size_music_hai;
+extern unsigned char music_final[]; extern unsigned int size_music_final;
+}
 extern "C" {
 #include "sprites.h"
 #include "font.h"
@@ -32,6 +39,7 @@ static const char* WORLD_NAME[4] = { "Ground Hog Day", "When Pigs Fly", "Flight 
 
 static GSGLOBAL* gs;
 static GSTEXTURE texPig, texBox, texWheel, texFlag, texFontS, texFontB;
+static GSTEXTURE texDecor[DEC_COUNT];
 static char padBuf[256] __attribute__((aligned(64)));
 static float kx = 1.f, ky = 1.f;   // pantalla virtual 640x448 -> pantalla real
 
@@ -130,11 +138,22 @@ static void textLeft(float x, float y, const char* s, float scale, int r, int g,
 
 // ---------------------------------------------------------------- sonido
 #ifndef NO_AUDIO
+// Mezclador continuo: la musica (11025 Hz) y un efecto (22050 Hz) se suman y se envian sin cortes a 22050 Hz mono.
+enum { MUS_NONE = -1, MUS_MAIN = 0, MUS_HAI = 1, MUS_FINAL = 2, MUS_COUNT = 3 };
+struct Track { short* d; int n; };
 static bool audioOK = false;
-static const SoundData* curSnd = NULL;
-static int sndPos = 0;
-static int idleAvail = 0;      // espacio libre del buffer de audio cuando esta vacio
-static int tailFrames = -1;    // cuadros transcurridos desde que se entrego el ultimo trozo (-1 = nada pendiente)
+static Track mus[MUS_COUNT];
+static int musCur = MUS_NONE, musWant = MUS_NONE;
+static float musPos = 0.f, musFade = 0.f;
+static const SoundData* fx = NULL;
+static int fxPos = 0;
+static int idleAvail = 0;                      // capacidad del buffer de audio
+static const int TARGET_FILL = 6144;           // bytes que mantenemos en el buffer (~140 ms)
+static const float MUSIC_VOL = 0.60f, FX_VOL = 0.90f;
+
+static void loadTrack(Track& t, const unsigned char* src, unsigned bytes) {
+    t.n = (int)(bytes / 2); t.d = (short*)memalign(64, bytes); memcpy(t.d, src, bytes);   // copia alineada: la MIPS no admite lecturas de 16 bits desalineadas
+}
 static void audioInit() {
     SifLoadModule("rom0:LIBSD", 0, NULL);
     int ret = 0;
@@ -145,39 +164,67 @@ static void audioInit() {
     if (audsrv_set_format(&fmt) != 0) return;
     audsrv_set_volume(MAX_VOLUME);
     idleAvail = audsrv_available();
+    loadTrack(mus[MUS_MAIN], music_main, size_music_main);
+    loadTrack(mus[MUS_HAI], music_hai, size_music_hai);
+    loadTrack(mus[MUS_FINAL], music_final, size_music_final);
     audioOK = true;
 }
-static void sndPlay(int id) {
-    if (!audioOK) return;
-    audsrv_stop_audio();
-    curSnd = &SOUNDS[id]; sndPos = 0; tailFrames = -1;
+static void sndPlay(int id) { if (audioOK) { fx = &SOUNDS[id]; fxPos = 0; } }
+static void musicWant(int m) { musWant = m; }
+static void mixChunk(short* out, int n) {
+    for (int i = 0; i < n; i++) {
+        float v = 0.f;
+        if (musCur != MUS_NONE) {
+            const Track& t = mus[musCur];
+            int i0 = (int)musPos, i1 = i0 + 1; if (i1 >= t.n) i1 = 0;
+            float fr = musPos - (float)i0;
+            v += ((float)t.d[i0] * (1.f - fr) + (float)t.d[i1] * fr) * MUSIC_VOL * musFade;
+            musPos += 0.5f; if (musPos >= (float)t.n) musPos -= (float)t.n;
+            if (musFade < 1.f) { musFade += 1.f / (22050.f * 0.25f); if (musFade > 1.f) musFade = 1.f; }
+        }
+        if (fx) { v += (float)fx->data[fxPos] * FX_VOL; if (++fxPos >= fx->samples) fx = NULL; }
+        if (v > 32767.f) { v = 32767.f; }
+        if (v < -32768.f) { v = -32768.f; }
+        out[i] = (short)v;
+    }
 }
-static void sndPump() {                        // entrega el sonido en trozos, una vez por cuadro
+static void sndPump() {
     if (!audioOK) return;
-    if (curSnd) {
-        int avail = audsrv_available(), remain = (curSnd->samples - sndPos) * 2;
-        int n = avail < remain ? avail : remain;
-        if (n > 4096) n = 4096;
-        n &= ~1;
-        if (n > 0) { audsrv_play_audio((const char*)(curSnd->data + sndPos), n); sndPos += n / 2; }
-        if (sndPos >= curSnd->samples) { curSnd = NULL; tailFrames = 0; }
-        return;
-    }
-    if (tailFrames >= 0) {                     // todo entregado: esperar a que el buffer se vacie y cortar el audio
-        tailFrames++;
-        if (audsrv_available() >= idleAvail - 64 || tailFrames > 300) { audsrv_stop_audio(); tailFrames = -1; }
-    }
+    if (musWant != musCur) { musCur = musWant; musPos = 0.f; musFade = 0.f; }   // cambio de cancion con entrada suave
+    int fill = idleAvail - audsrv_available();
+    int want = TARGET_FILL - fill;
+    if (want < 64) return;
+    if (want > 8192) want = 8192;
+    static short buf[4096];
+    int n = want / 2; if (n > 4096) n = 4096;
+    mixChunk(buf, n);                          // siempre se envia algo (silencio si no hay nada): asi el buffer nunca se repite
+    audsrv_play_audio((const char*)buf, n * 2);
 }
 #else
 static void audioInit() {}
 static void sndPlay(int) {}
+static void musicWant(int) {}
 static void sndPump() {}
+enum { MUS_NONE = -1, MUS_MAIN = 0, MUS_HAI = 1, MUS_FINAL = 2 };
 #endif
 
 // ---------------------------------------------------------------- dibujo del juego
 static void worldToScreen(const Game& g, float wx, float wy, float& sx, float& sy) {
     float cx, cy; g.camera(cx, cy);
     sx = (wx - cx) * ZOOM + SCREEN_W * 0.5f; sy = (wy - cy) * ZOOM + SCREEN_H * 0.5f;
+}
+
+static void drawDecor(const Game& g, int layer) {
+    const LevelData& L = g.levelData();
+    for (int i = 0; i < L.ndecor; i++) {
+        const DecorItem& d = L.decor[i];
+        if (d.layer != layer) continue;
+        float sx, sy; worldToScreen(g, d.x, d.y, sx, sy);
+        GSTEXTURE& t = texDecor[d.type];
+        float w = t.Width * d.scale, h = t.Height * d.scale, hh = h * 0.5f;
+        if (sx < -w - 40 || sx > SCREEN_W + w + 40) continue;     // fuera de pantalla
+        sprite(t, sx + hh * sinf(d.angle), sy - hh * cosf(d.angle), w, h, d.angle);   // la base queda apoyada en (x,y)
+    }
 }
 
 static void drawTerrain(const Game& g) {
@@ -276,6 +323,7 @@ int main(int, char**) {
     uploadTex(texBox, SPR_BOX_PIX, SPR_BOX_W, SPR_BOX_H);
     uploadTex(texWheel, SPR_WHEEL_PIX, SPR_WHEEL_W, SPR_WHEEL_H);
     uploadTex(texFlag, SPR_FLAG_PIX, SPR_FLAG_W, SPR_FLAG_H);
+    for (int i = 0; i < DEC_COUNT; i++) uploadTex(texDecor[i], (const uint32_t*)(decor_raw + DECOR_TEX[i].offset), DECOR_TEX[i].w, DECOR_TEX[i].h);
     uploadFont(texFontS, FONT_SMALL);
     uploadFont(texFontB, FONT_BIG);
 
@@ -363,6 +411,9 @@ int main(int, char**) {
             }
         }
         if (screen != prevScreen) { if (!keepMsg) msgTimer = 0.f; keepMsg = false; prevScreen = screen; }
+        // musica segun la pantalla (como el juego original): menus = main, nivel = hai, victoria = final
+        if (screen != S_GAME) musicWant(MUS_MAIN);
+        else musicWant(game.mode() == M_WIN ? MUS_FINAL : MUS_HAI);
         sndPump();
 
         // ---------------- dibujo ----------------
@@ -432,7 +483,9 @@ int main(int, char**) {
                 textCentered(false, 320, 190, "Aguarde a la sig. actualización", 1.15f, 255, 240, 120);
             }
         } else {
+            drawDecor(game, 0);
             drawTerrain(game);
+            drawDecor(game, 1);
             {   // bandera de meta (cuadros) parada en el suelo
                 const LevelData& L = game.levelData();
                 float fx, fy; worldToScreen(game, L.goalX, L.goalY - 57.f, fx, fy);
