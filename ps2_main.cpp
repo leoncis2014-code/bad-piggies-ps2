@@ -21,6 +21,7 @@ extern unsigned int size_audsrv_irx;
 #include "decor.h"
 extern "C" {
 extern unsigned char decor_raw[]; extern unsigned int size_decor_raw;
+extern unsigned char terrain1_raw[]; extern unsigned int size_terrain1_raw;
 extern unsigned char music_main[]; extern unsigned int size_music_main;
 extern unsigned char music_hai[]; extern unsigned int size_music_hai;
 extern unsigned char music_final[]; extern unsigned int size_music_final;
@@ -40,6 +41,8 @@ static const char* WORLD_NAME[4] = { "Ground Hog Day", "When Pigs Fly", "Flight 
 static GSGLOBAL* gs;
 static GSTEXTURE texPig, texBox, texWheel, texFlag, texFontS, texFontB;
 static GSTEXTURE texDecor[DEC_COUNT];
+static GSTEXTURE texTerrain[1];                       // una por nivel con arte (por ahora solo el nivel 1)
+static const unsigned char* const TERRAIN_RAW[1] = { terrain1_raw };
 static char padBuf[256] __attribute__((aligned(64)));
 static float kx = 1.f, ky = 1.f;   // pantalla virtual 640x448 -> pantalla real
 
@@ -138,17 +141,19 @@ static void textLeft(float x, float y, const char* s, float scale, int r, int g,
 
 // ---------------------------------------------------------------- sonido
 #ifndef NO_AUDIO
-// Mezclador continuo: la musica (11025 Hz) y un efecto (22050 Hz) se suman y se envian sin cortes a 22050 Hz mono.
+// Mezclador continuo: la musica (11025 Hz) y un efecto (22050 Hz) se suman y se envian sin cortes
+// en el formato nativo de la consola: 48000 Hz, 16 bits, estereo (asi el modulo de audio no convierte nada).
 enum { MUS_NONE = -1, MUS_MAIN = 0, MUS_HAI = 1, MUS_FINAL = 2, MUS_COUNT = 3 };
 struct Track { short* d; int n; };
 static bool audioOK = false;
 static Track mus[MUS_COUNT];
 static int musCur = MUS_NONE, musWant = MUS_NONE;
 static float musPos = 0.f, musFade = 0.f;
+static float fxPosF = 0.f;
 static const SoundData* fx = NULL;
-static int fxPos = 0;
 static int idleAvail = 0;                      // capacidad del buffer de audio
-static const int TARGET_FILL = 6144;           // bytes que mantenemos en el buffer (~140 ms)
+static int targetFill = 12288;                 // bytes que mantenemos en el buffer (~60 ms)
+static const float MUS_STEP = 11025.f / 48000.f, FX_STEP = 22050.f / 48000.f;
 static const float MUSIC_VOL = 0.60f, FX_VOL = 0.90f;
 
 static void loadTrack(Track& t, const unsigned char* src, unsigned bytes) {
@@ -160,18 +165,19 @@ static void audioInit() {
     int id = SifExecModuleBuffer(audsrv_irx, size_audsrv_irx, 0, NULL, &ret);
     if (id < 0 || ret == 1) return;            // el modulo no arranco: seguimos sin sonido
     if (audsrv_init() != 0) return;
-    audsrv_fmt_t fmt; fmt.freq = 22050; fmt.bits = 16; fmt.channels = 1;
+    audsrv_fmt_t fmt; fmt.freq = 48000; fmt.bits = 16; fmt.channels = 2;
     if (audsrv_set_format(&fmt) != 0) return;
     audsrv_set_volume(MAX_VOLUME);
     idleAvail = audsrv_available();
+    targetFill = idleAvail * 3 / 4; if (targetFill > 23040) targetFill = 23040; targetFill &= ~3;
     loadTrack(mus[MUS_MAIN], music_main, size_music_main);
     loadTrack(mus[MUS_HAI], music_hai, size_music_hai);
     loadTrack(mus[MUS_FINAL], music_final, size_music_final);
     audioOK = true;
 }
-static void sndPlay(int id) { if (audioOK) { fx = &SOUNDS[id]; fxPos = 0; } }
+static void sndPlay(int id) { if (audioOK) { fx = &SOUNDS[id]; fxPosF = 0.f; } }
 static void musicWant(int m) { musWant = m; }
-static void mixChunk(short* out, int n) {
+static void mixChunk(short* out, int n) {     // n = cuadros estereo
     for (int i = 0; i < n; i++) {
         float v = 0.f;
         if (musCur != MUS_NONE) {
@@ -179,26 +185,31 @@ static void mixChunk(short* out, int n) {
             int i0 = (int)musPos, i1 = i0 + 1; if (i1 >= t.n) i1 = 0;
             float fr = musPos - (float)i0;
             v += ((float)t.d[i0] * (1.f - fr) + (float)t.d[i1] * fr) * MUSIC_VOL * musFade;
-            musPos += 0.5f; if (musPos >= (float)t.n) musPos -= (float)t.n;
-            if (musFade < 1.f) { musFade += 1.f / (22050.f * 0.25f); if (musFade > 1.f) musFade = 1.f; }
+            musPos += MUS_STEP; if (musPos >= (float)t.n) musPos -= (float)t.n;
+            if (musFade < 1.f) { musFade += 1.f / (48000.f * 0.25f); if (musFade > 1.f) musFade = 1.f; }
         }
-        if (fx) { v += (float)fx->data[fxPos] * FX_VOL; if (++fxPos >= fx->samples) fx = NULL; }
+        if (fx) {
+            int i0 = (int)fxPosF, i1 = i0 + 1; if (i1 >= fx->samples) i1 = i0;
+            float fr = fxPosF - (float)i0;
+            v += ((float)fx->data[i0] * (1.f - fr) + (float)fx->data[i1] * fr) * FX_VOL;
+            fxPosF += FX_STEP; if (fxPosF >= (float)fx->samples) fx = NULL;
+        }
         if (v > 32767.f) { v = 32767.f; }
         if (v < -32768.f) { v = -32768.f; }
-        out[i] = (short)v;
+        out[2 * i] = (short)v; out[2 * i + 1] = (short)v;
     }
 }
 static void sndPump() {
     if (!audioOK) return;
     if (musWant != musCur) { musCur = musWant; musPos = 0.f; musFade = 0.f; }   // cambio de cancion con entrada suave
     int fill = idleAvail - audsrv_available();
-    int want = TARGET_FILL - fill;
-    if (want < 64) return;
+    int want = targetFill - fill;
+    if (want < 256) return;
     if (want > 8192) want = 8192;
-    static short buf[4096];
-    int n = want / 2; if (n > 4096) n = 4096;
+    static short buf[2 * 2048];
+    int n = want / 4; if (n > 2048) n = 2048;
     mixChunk(buf, n);                          // siempre se envia algo (silencio si no hay nada): asi el buffer nunca se repite
-    audsrv_play_audio((const char*)buf, n * 2);
+    audsrv_play_audio((const char*)buf, n * 4);
 }
 #else
 static void audioInit() {}
@@ -229,21 +240,39 @@ static void drawDecor(const Game& g, int layer) {
 
 static void drawTerrain(const Game& g) {
     const LevelData& L = g.levelData();
-    u64 fill = rgba(0x5A, 0x78, 0x6E, 0x80), grass = rgba(0x4C, 0xA8, 0x32, 0x80);
-    static float X[1024], Y[1024];
+    GSTEXTURE& tt = texTerrain[g.levelIndex()];
+    u64 white = rgba(0x80, 0x80, 0x80, 0x80);
+    static float X[1024], Y[1024], U[1024], V[1024];
     int n = L.npts < 1024 ? L.npts : 1024;
-    for (int i = 0; i < n; i++) worldToScreen(g, L.pts[i][0], L.pts[i][1], X[i], Y[i]);
-    for (int i = 0; i < L.ntris; i++) {
-        int a = L.tris[i][0], b = L.tris[i][1], c = L.tris[i][2];
-        if (a < n && b < n && c < n) tri(X[a], Y[a], X[b], Y[b], X[c], Y[c], fill);
+    for (int i = 0; i < n; i++) {
+        worldToScreen(g, L.pts[i][0], L.pts[i][1], X[i], Y[i]);
+        U[i] = (L.pts[i][0] - L.texOX) * L.texScale; V[i] = (L.pts[i][1] - L.texOY) * L.texScale;
+        if (U[i] < 0.5f) { U[i] = 0.5f; }
+        if (U[i] > L.texW - 0.5f) { U[i] = L.texW - 0.5f; }
+        if (V[i] < 0.5f) { V[i] = 0.5f; }
+        if (V[i] > L.texH - 0.5f) { V[i] = L.texH - 0.5f; }
     }
+    for (int i = 0; i < L.ntris; i++) {      // la roca: arte original del nivel
+        int a = L.tris[i][0], b = L.tris[i][1], c = L.tris[i][2];
+        if (a < n && b < n && c < n)
+            gsKit_prim_triangle_texture(gs, &tt, X[a] * kx, Y[a] * ky, U[a], V[a], X[b] * kx, Y[b] * ky, U[b], V[b], X[c] * kx, Y[c] * ky, U[c], V[c], 1, white);
+    }
+    // franja de hierba sobre el borde superior: banda clara arriba, oscura abajo
+    u64 lightG = rgba(0x8C, 0xD2, 0x3E, 0x80), darkG = rgba(0x4A, 0x96, 0x22, 0x80);
     for (int r = 0; r < L.nrings; r++) {
         int a = L.ringStart[r], b = L.ringStart[r + 1];
         for (int i = a; i < b && i < n; i++) {
             if (!L.top[i]) continue;
             int j = (i + 1 < b) ? i + 1 : a;
-            for (int k = 0; k < 4; k++)   // linea gruesa de hierba
-                gsKit_prim_line(gs, X[i] * kx, (Y[i] + k) * ky, X[j] * kx, (Y[j] + k) * ky, 2, grass);
+            float dx = X[j] - X[i], dy = Y[j] - Y[i], ln = sqrtf(dx * dx + dy * dy);
+            if (ln < 0.01f) continue;
+            float nx = dy / ln, ny = -dx / ln;                          // normal hacia el aire
+            const float O = 5.f, M = -1.f, I = -9.f;                     // borde exterior, union de bandas, borde interior
+            float ox1 = X[i] + nx * O, oy1 = Y[i] + ny * O, ox2 = X[j] + nx * O, oy2 = Y[j] + ny * O;
+            float mx1 = X[i] + nx * M, my1 = Y[i] + ny * M, mx2 = X[j] + nx * M, my2 = Y[j] + ny * M;
+            float ix1 = X[i] + nx * I, iy1 = Y[i] + ny * I, ix2 = X[j] + nx * I, iy2 = Y[j] + ny * I;
+            tri(ox1, oy1, ox2, oy2, mx2, my2, lightG); tri(ox1, oy1, mx2, my2, mx1, my1, lightG);
+            tri(mx1, my1, mx2, my2, ix2, iy2, darkG);  tri(mx1, my1, ix2, iy2, ix1, iy1, darkG);
         }
     }
 }
@@ -324,10 +353,16 @@ int main(int, char**) {
     uploadTex(texWheel, SPR_WHEEL_PIX, SPR_WHEEL_W, SPR_WHEEL_H);
     uploadTex(texFlag, SPR_FLAG_PIX, SPR_FLAG_W, SPR_FLAG_H);
     for (int i = 0; i < DEC_COUNT; i++) uploadTex(texDecor[i], (const uint32_t*)(decor_raw + DECOR_TEX[i].offset), DECOR_TEX[i].w, DECOR_TEX[i].h);
+    Game game;
+    for (int i = 0; i < Game::levelCount() && i < 1; i++) {
+        game.loadLevel(i);
+        const LevelData& LD = game.levelData();
+        uploadTex(texTerrain[i], (const uint32_t*)TERRAIN_RAW[i], LD.texW, LD.texH);
+    }
+    game.loadLevel(0);
     uploadFont(texFontS, FONT_SMALL);
     uploadFont(texFontB, FONT_BIG);
 
-    Game game;
     Screen screen = S_TITLE;
     int sel = 0;                 // nivel elegido en el selector (0..14)
     int wsel = 0;                // mundo elegido (0..3)

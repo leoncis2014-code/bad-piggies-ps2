@@ -20,4 +20,6 @@ struct LevelData {
     float deathY;                      // por debajo de esto se pierde
     int ndecor;
     const DecorItem* decor;
+    int texW, texH;                    // textura de la roca (la mitad de resolucion)
+    float texOX, texOY, texScale;      // u = (x - texOX) * texScale, v = (y - texOY) * texScale
 };

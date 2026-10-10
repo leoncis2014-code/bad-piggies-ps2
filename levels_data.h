@@ -115,6 +115,6 @@ static const DecorItem L1_DECOR[] = {
 };
 
 static const LevelData LEVELS[] = {
-  { 40, L1_PTS, L1_TOP, 1, L1_RINGS, 38, L1_TRIS, 300.0f, 148.5f, 700.0f, 449.8f, 560.0f, 20, L1_DECOR }
+  { 40, L1_PTS, L1_TOP, 1, L1_RINGS, 38, L1_TRIS, 300.0f, 148.5f, 700.0f, 449.8f, 560.0f, 20, L1_DECOR, 393, 165, 0.0f, 166.0f, 0.500f }
 };
 static const int NUM_LEVELS_DATA = 1;

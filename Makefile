@@ -4,7 +4,7 @@ GSKIT ?= $(PS2DEV)/gsKit
 BOX2D = third_party/box2d
 B2_SRC = $(wildcard $(BOX2D)/src/collision/*.cpp) $(wildcard $(BOX2D)/src/common/*.cpp) $(wildcard $(BOX2D)/src/dynamics/*.cpp) $(wildcard $(BOX2D)/src/rope/*.cpp)
 B2_OBJS = $(B2_SRC:.cpp=.o)
-EE_OBJS = ps2_main.o game.o sprites.o font.o sounds.o audsrv_irx.o decor_raw.o music_main.o music_hai.o music_final.o $(B2_OBJS)
+EE_OBJS = ps2_main.o game.o sprites.o font.o sounds.o audsrv_irx.o decor_raw.o terrain1_raw.o music_main.o music_hai.o music_final.o $(B2_OBJS)
 EE_INCS += -I$(GSKIT)/include -I$(BOX2D)/include -I$(BOX2D)/src -I.
 EE_LDFLAGS += -L$(GSKIT)/lib
 EE_CFLAGS += -O2
@@ -22,6 +22,8 @@ audsrv_irx.c: $(PS2SDK)/iop/irx/audsrv.irx
 # decoraciones y musica: archivos binarios que se incrustan en el programa
 decor_raw.c: decor.raw
 	$(PS2SDK)/bin/bin2c $< $@ decor_raw
+terrain1_raw.c: terrain1.raw
+	$(PS2SDK)/bin/bin2c $< $@ terrain1_raw
 music_main.c: music_main.raw
 	$(PS2SDK)/bin/bin2c $< $@ music_main
 music_hai.c: music_hai.raw
