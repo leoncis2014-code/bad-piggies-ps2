@@ -19,9 +19,13 @@ extern unsigned int size_audsrv_irx;
 #endif
 #include "game.h"
 #include "decor.h"
+#include "screens.h"
 extern "C" {
 extern unsigned char decor_raw[]; extern unsigned int size_decor_raw;
 extern unsigned char terrain1_raw[]; extern unsigned int size_terrain1_raw;
+extern unsigned char screen_title[]; extern unsigned int size_screen_title;
+extern unsigned char screen_worlds[]; extern unsigned int size_screen_worlds;
+extern unsigned char screen_levels[]; extern unsigned int size_screen_levels;
 extern unsigned char music_main[]; extern unsigned int size_music_main;
 extern unsigned char music_hai[]; extern unsigned int size_music_hai;
 extern unsigned char music_final[]; extern unsigned int size_music_final;
@@ -34,12 +38,11 @@ extern "C" {
 
 enum Screen { S_TITLE, S_WORLDS, S_SELECT, S_GAME };
 
-static const char* WORLD_L1[4] = { "Ground Hog", "When Pigs", "Flight in", "Sandbox" };
-static const char* WORLD_L2[4] = { "Day", "Fly", "the Night", "" };
-static const char* WORLD_NAME[4] = { "Ground Hog Day", "When Pigs Fly", "Flight in the Night", "Sandbox" };
 
 static GSGLOBAL* gs;
-static GSTEXTURE texPig, texBox, texWheel, texFlag, texFontS, texFontB;
+static GSTEXTURE texPig, texBox, texWheel, texFlag, texFontS, texScreen;
+static const float FONT_K = 24.f / 22.f;   // el atlas es de 22 px; esto mantiene el tamano de antes
+static int screenLoaded = -1;
 static GSTEXTURE texDecor[DEC_COUNT];
 static GSTEXTURE texTerrain[1];                       // una por nivel con arte (por ahora solo el nivel 1)
 static const unsigned char* const TERRAIN_RAW[1] = { terrain1_raw };
@@ -127,14 +130,15 @@ static void drawTextRaw(GSTEXTURE& tex, const FontData& f, float x, float y, con
         x += g.adv * scale;
     }
 }
-// big=true usa la tipografia grande (solo mayusculas del titulo). cx = centro horizontal.
-static void textCentered(bool big, float cx, float y, const char* s, float scale, int r, int g, int b) {
-    GSTEXTURE& tex = big ? texFontB : texFontS; const FontData& f = big ? FONT_BIG : FONT_SMALL;
-    float x = cx - textWidth(f, s, scale) * 0.5f;
-    drawTextRaw(tex, f, x + 2.f * scale, y + 2.f * scale, s, scale, rgba(0, 0, 0, 0x60));   // sombra
-    drawTextRaw(tex, f, x, y, s, scale, rgba(r, g, b, 0x80));
+// cx = centro horizontal; (el parametro "big" ya no se usa: la tipografia grande se reemplazo por las pantallas originales)
+static void textCentered(bool, float cx, float y, const char* s, float scale, int r, int g, int b) {
+    scale *= FONT_K;
+    float x = cx - textWidth(FONT_SMALL, s, scale) * 0.5f;
+    drawTextRaw(texFontS, FONT_SMALL, x + 2.f * scale, y + 2.f * scale, s, scale, rgba(0, 0, 0, 0x60));   // sombra
+    drawTextRaw(texFontS, FONT_SMALL, x, y, s, scale, rgba(r, g, b, 0x80));
 }
 static void textLeft(float x, float y, const char* s, float scale, int r, int g, int b) {
+    scale *= FONT_K;
     drawTextRaw(texFontS, FONT_SMALL, x + 1.5f * scale, y + 1.5f * scale, s, scale, rgba(0, 0, 0, 0x60));
     drawTextRaw(texFontS, FONT_SMALL, x, y, s, scale, rgba(r, g, b, 0x80));
 }
@@ -218,6 +222,30 @@ static void musicWant(int) {}
 static void sndPump() {}
 enum { MUS_NONE = -1, MUS_MAIN = 0, MUS_HAI = 1, MUS_FINAL = 2 };
 #endif
+
+// ---------------------------------------------------------------- pantallas originales
+static void screenInit() {
+    memset(&texScreen, 0, sizeof(texScreen));
+    texScreen.Width = SCR_W; texScreen.Height = SCR_H; texScreen.PSM = GS_PSM_CT16; texScreen.Filter = GS_FILTER_LINEAR;
+    texScreen.Mem = (u32*)memalign(128, SCR_W * SCR_H * 2);
+    texScreen.Vram = gsKit_vram_alloc(gs, gsKit_texture_size(SCR_W, SCR_H, GS_PSM_CT16), GSKIT_ALLOC_USERBUFFER);
+}
+static void screenLoad(int idx) {            // sube la imagen pedida a la memoria de video (se hace al cambiar de pantalla)
+    if (idx == screenLoaded) return;
+    const unsigned char* src = idx == SCR_TITLE ? screen_title : (idx == SCR_WORLDS ? screen_worlds : screen_levels);
+    memcpy(texScreen.Mem, src, SCR_W * SCR_H * 2);
+    FlushCache(0);
+    gsKit_texture_upload(gs, &texScreen);
+    screenLoaded = idx;
+}
+static void screenDraw(int idx) {            // la imagen es 640x400: va centrada, con franjas del color del borde arriba y abajo
+    const int* c = SCR_BARS[idx];
+    rect(0, 0, SCREEN_W, 24, rgba(c[0], c[1], c[2], 0x80));
+    rect(0, 424, SCREEN_W, SCREEN_H, rgba(c[3], c[4], c[5], 0x80));
+    gs->PrimAlphaEnable = GS_SETTING_OFF;      // imagen opaca: sin mezcla
+    quadUV(texScreen, 0, 24, 640, 424, 0, 0, (float)SCR_W, (float)SCR_H, rgba(0x80, 0x80, 0x80, 0x80));
+    gs->PrimAlphaEnable = GS_SETTING_ON;
+}
 
 // ---------------------------------------------------------------- dibujo del juego
 static void worldToScreen(const Game& g, float wx, float wy, float& sx, float& sy) {
@@ -361,7 +389,7 @@ int main(int, char**) {
     }
     game.loadLevel(0);
     uploadFont(texFontS, FONT_SMALL);
-    uploadFont(texFontB, FONT_BIG);
+    screenInit();
 
     Screen screen = S_TITLE;
     int sel = 0;                 // nivel elegido en el selector (0..14)
@@ -452,66 +480,45 @@ int main(int, char**) {
         sndPump();
 
         // ---------------- dibujo ----------------
+        if (screen == S_TITLE) screenLoad(SCR_TITLE);
+        else if (screen == S_WORLDS) screenLoad(SCR_WORLDS);
+        else if (screen == S_SELECT) screenLoad(SCR_LEVELS);
         gsKit_clear(gs, rgba(0xB4, 0xDC, 0xFF, 0x80));   // alfa 0x80 = opaco (con 0x00 no se borra la pantalla)
         if (screen == S_TITLE) {
-            rect(0, 300, SCREEN_W, SCREEN_H, rgba(0x4C, 0xA8, 0x32, 0x80));
-            rect(0, 300, SCREEN_W, 312, rgba(0x6C, 0xC8, 0x3A, 0x80));
-            rect(0, 400, SCREEN_W, SCREEN_H, rgba(0x3A, 0x8A, 0x28, 0x80));
-            textCentered(true, 320, 48, "BAD PIGGIES", 1.25f, 130, 220, 60);
-            drawVehicleDemo(320, 228, 1.6f, sinf(clock * 2.f) * 4.f);
-            if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 338, "Pulsá X para jugar", 1.5f, 255, 255, 255);
-            textCentered(false, 320, 414, "Port no oficial - versión de prueba", 0.7f, 255, 255, 255);
+            screenDraw(SCR_TITLE);                                           // pantalla de inicio original
+            if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 330, "Pulsá X para jugar", 1.2f, 255, 255, 255);
         } else if (screen == S_WORLDS) {
-            rect(0, 340, SCREEN_W, SCREEN_H, rgba(0x4C, 0xA8, 0x32, 0x80));
-            textCentered(false, 320, 22, "Elegí un mundo", 1.5f, 255, 255, 255);
-            static const int PC[4][3] = { { 0x6C, 0xBF, 0x3A }, { 0xE0, 0xA0, 0x20 }, { 0x4A, 0x8C, 0xE0 }, { 0xD0, 0xA0, 0x60 } };
-            for (int i = 0; i < 4; i++) {
-                float x1 = 42 + i * 144, y1 = 80, x2 = x1 + 124, y2 = 330;
-                bool ok = (i == 0);
-                rect(x1, y1, x2, y2, rgba(PC[i][0], PC[i][1], PC[i][2], 0x80));
-                frameRect(x1, y1, x2, y2, 4.f, rgba(0xD8, 0xDC, 0xE0, 0x80));
-                textCentered(false, (x1 + x2) * 0.5f, y1 + 16, WORLD_L1[i], 0.78f, 255, 255, 255);
-                if (WORLD_L2[i][0]) textCentered(false, (x1 + x2) * 0.5f, y1 + 42, WORLD_L2[i], 1.1f, 255, 255, 255);
-                if (ok) {
-                    spriteOf(P_PIG, (x1 + x2) * 0.5f, y1 + 140 + sinf(clock * 3.f) * 3.f, 1.6f, 0.f);
-                    textCentered(false, (x1 + x2) * 0.5f, y2 - 40, "Disponible", 0.85f, 255, 255, 255);
-                } else {
-                    rect(x1, y1, x2, y2, rgba(0x10, 0x20, 0x30, 0x40));        // velo oscuro
-                    float cx = (x1 + x2) * 0.5f, cy = y1 + 140;                  // candado
-                    frameRect(cx - 14, cy - 34, cx + 14, cy - 4, 5.f, rgba(0xC0, 0xC4, 0xC8, 0x80));
-                    rect(cx - 24, cy - 8, cx + 24, cy + 30, rgba(0xF0, 0xC8, 0x20, 0x80));
-                    rect(cx - 4, cy + 6, cx + 4, cy + 20, rgba(0x60, 0x48, 0x10, 0x80));
-                    textCentered(false, cx, y2 - 40, "Bloqueado", 0.85f, 230, 230, 230);
-                }
-                if (i == wsel) {
-                    float pulse = 3.f + 2.f * sinf(clock * 6.f);
-                    frameRect(x1 - pulse, y1 - pulse, x2 + pulse, y2 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
-                }
+            screenDraw(SCR_WORLDS);                                          // selector de mundos original
+            static const float PX[4] = { 87, 213, 339, 464 };                // paneles dentro de la imagen de 640x400
+            for (int i = 1; i < 4; i++) rect(PX[i], 24 + 40, PX[i] + 102, 24 + 328, rgba(0x10, 0x20, 0x30, 0x48));   // velo: bloqueados
+            {   // candado sobre "When Pigs Fly" (el original lo muestra abierto)
+                float cx = PX[1] + 51, cy = 24 + 190;
+                frameRect(cx - 14, cy - 34, cx + 14, cy - 4, 5.f, rgba(0xC0, 0xC4, 0xC8, 0x80));
+                rect(cx - 24, cy - 8, cx + 24, cy + 30, rgba(0xF0, 0xC8, 0x20, 0x80));
+                rect(cx - 4, cy + 6, cx + 4, cy + 20, rgba(0x60, 0x48, 0x10, 0x80));
             }
-            textCentered(false, 320, 376, "X: elegir     Círculo: volver", 0.9f, 255, 255, 255);
+            {
+                float pulse = 2.f + 2.f * sinf(clock * 6.f);
+                frameRect(PX[wsel] - pulse, 24 + 40 - pulse, PX[wsel] + 102 + pulse, 24 + 328 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+            }
+            textCentered(false, 320, 396, "X: elegir     Círculo: volver", 0.8f, 255, 255, 255);
             if (msgTimer > 0) {
                 rect(40, 170, 600, 250, rgba(0x10, 0x20, 0x30, 0x70));
                 frameRect(40, 170, 600, 250, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
                 textCentered(false, 320, 190, "Aguarde a la sig. actualización", 1.15f, 255, 240, 120);
             }
         } else if (screen == S_SELECT) {
-            rect(0, 330, SCREEN_W, SCREEN_H, rgba(0x4C, 0xA8, 0x32, 0x80));
-            textCentered(false, 320, 6, WORLD_NAME[0], 1.15f, 255, 240, 120);
-            textCentered(false, 320, 48, "Elegí un nivel", 0.8f, 255, 255, 255);
+            screenDraw(SCR_LEVELS);                                          // selector de niveles original
+            static const float TX[5] = { 148, 233, 319, 405, 490 }, TY[3] = { 65, 160, 252 };   // centros de las casillas
             for (int i = 0; i < 15; i++) {
-                int col = i % 5, row = i / 5;
-                float x1 = 62 + col * 108, y1 = 82 + row * 100, x2 = x1 + 84, y2 = y1 + 84;
-                bool ok = i < Game::levelCount();
-                rect(x1, y1, x2, y2, ok ? rgba(0x6C, 0xBF, 0x3A, 0x80) : rgba(0x3E, 0x6A, 0x3A, 0x80));
-                frameRect(x1, y1, x2, y2, 3.f, ok ? rgba(0x3A, 0x7A, 0x22, 0x80) : rgba(0x2A, 0x4A, 0x28, 0x80));
-                char n[8]; snprintf(n, sizeof(n), "%d", i + 1);
-                textCentered(false, (x1 + x2) * 0.5f, y1 + 20, n, 1.9f, ok ? 255 : 170, ok ? 255 : 190, ok ? 255 : 170);
+                float cx = TX[i % 5], cy = 24 + TY[i / 5];
+                if (i >= Game::levelCount()) rect(cx - 35, cy - 35, cx + 35, cy + 52, rgba(0x10, 0x20, 0x30, 0x50));   // velo: no existe todavia
                 if (i == sel) {
-                    float pulse = 3.f + 2.f * sinf(clock * 6.f);
-                    frameRect(x1 - pulse, y1 - pulse, x2 + pulse, y2 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                    float pulse = 2.f + 2.f * sinf(clock * 6.f);
+                    frameRect(cx - 38 - pulse, cy - 38 - pulse, cx + 38 + pulse, cy + 38 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
                 }
             }
-            textCentered(false, 320, 392, "X: jugar     Círculo: volver", 0.9f, 255, 255, 255);
+            textCentered(false, 320, 396, "X: jugar     Círculo: volver", 0.8f, 255, 255, 255);
             if (msgTimer > 0) {
                 rect(40, 170, 600, 250, rgba(0x10, 0x20, 0x30, 0x70));
                 frameRect(40, 170, 600, 250, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
