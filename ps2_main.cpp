@@ -321,10 +321,11 @@ static void drawTerrain(const Game& g) {
         if (a >= n || b >= n || c >= n) continue;
         float mnx = fminf(X[a], fminf(X[b], X[c])), mxx = fmaxf(X[a], fmaxf(X[b], X[c]));
         if (mxx < -60 || mnx > SCREEN_W + 60) continue;                         // fuera de pantalla
-        if (textured)
+        if (textured) {       // (con llaves: en la libreria real esta funcion se expande a varias instrucciones)
             gsKit_prim_triangle_texture(gs, tt, X[a] * kx, Y[a] * ky, U[a], V[a], X[b] * kx, Y[b] * ky, U[b], V[b], X[c] * kx, Y[c] * ky, U[c], V[c], 1, white);
-        else
+        } else {
             tri(X[a], Y[a], X[b], Y[b], X[c], Y[c], flat);
+        }
     }
     // franja de hierba sobre el borde superior: banda clara arriba, oscura abajo
     u64 lightG = rgba(0x8C, 0xD2, 0x3E, 0x80), darkG = rgba(0x4A, 0x96, 0x22, 0x80);
