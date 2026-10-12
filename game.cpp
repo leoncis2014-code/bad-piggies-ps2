@@ -49,7 +49,8 @@ public:
         delete world; world = nullptr; chassis = nullptr; nwheels = 0;
         if (full) {
             for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) { cells[r][c] = -1; pig[r][c] = false; }
-            left[P_PIG] = 1; left[P_BOX] = 3; left[P_WHEEL] = 2; sel = P_BOX;
+            bool sbx = (L->flags & 1) != 0;       // sandbox: piezas ilimitadas
+            left[P_PIG] = sbx ? 99 : 1; left[P_BOX] = sbx ? 99 : 3; left[P_WHEEL] = sbx ? 99 : 2; sel = P_BOX;
         }
         mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0;
         camx = gx(); camy = gy() - 10.f;
@@ -175,6 +176,10 @@ public:
         // camara suave + camara libre con el analogico derecho
         lookOX += (in.lookX * 220.f - lookOX) * 0.12f; lookOY += (in.lookY * 140.f - lookOY) * 0.12f;
         camx += (px + lookOX - camx) * 0.08f; camy += (py - 20.f + lookOY - camy) * 0.08f;
+        if (L->flags & 1) {                       // sandbox: se juega libremente, sin meta ni derrota
+            if (py > 1200.f) reset(false);        // si cae al vacio, vuelve a construir
+            return;
+        }
         if (px >= L->goalX) { mode = M_WIN; events |= EV_WIN; return; }
         // volcado: boca abajo mas de 1.5 s = pierdes
         flip = (cosf(chassis->GetAngle()) < -0.25f) ? flip + dt : 0.f;
@@ -226,7 +231,9 @@ Game::~Game() { delete g; }
 void Game::reset() { g->reset(true); }
 bool Game::loadLevel(int i) { if (i < 0 || i >= NUM_LEVELS_DATA) return false; g->levelIdx = i; g->L = &LEVELS[i]; g->reset(true); return true; }
 int Game::levelIndex() const { return g->levelIdx; }
-int Game::levelCount() { return NUM_LEVELS_DATA; }
+int Game::levelCount() { return NUM_STORY_LEVELS; }
+int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }
+bool Game::isSandbox() const { return (g->L->flags & 1) != 0; }
 const LevelData& Game::levelData() const { return *g->L; }
 unsigned Game::takeEvents() { unsigned e = g->events; g->events = 0; return e; }
 void Game::update(float dt, const GameInput& in) { g->update(dt, in); }
