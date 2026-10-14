@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <libpad.h>
+#include <libmc.h>
 #include <gsKit.h>
 #include <dmaKit.h>
 #ifndef NO_AUDIO
@@ -45,6 +46,57 @@ static bool optCursor = false, optMusic = true, optSfx = true;
 static const float MENU_PX[4] = { 87, 213, 339, 464 };                       // paneles de mundos: x (ancho 102, y 64..352)
 static const float MENU_TX[5] = { 148, 233, 319, 405, 490 }, MENU_TY[3] = { 65, 160, 252 };   // casillas de niveles (y + 24)
 static const float OPT_ROWY[4] = { 138, 188, 238, 300 };                     // filas de opciones
+
+// ---------------------------------------------------------------- guardado en la memory card (ranura 1)
+struct SaveData { char magic[4]; int version; unsigned char stars[16]; unsigned char opt[4]; float best[16]; };
+static SaveData sv;
+static bool mcOK = false;
+static bool g_newRecord = false;      // el ultimo nivel ganado batio el mejor tiempo
+static float g_bestShown = 0.f;
+enum { FIO_RD = 0x0001, FIO_WR = 0x0002, FIO_CREAT = 0x0200, FIO_TRUNC = 0x0400 };
+static int mcResult() { int cmd = 0, res = 0; mcSync(0, &cmd, &res); return res; }
+static void saveClear() { memset(&sv, 0, sizeof(sv)); sv.magic[0] = 'B'; sv.magic[1] = 'P'; sv.magic[2] = 'G'; sv.magic[3] = '1'; sv.version = 1; sv.opt[1] = 1; sv.opt[2] = 1; }
+static void saveInit() {
+    saveClear();
+    if (mcInit(MC_TYPE_MC) < 0) return;
+    int type = 0, freeKb = 0, fmt = 0;
+    mcGetInfo(0, 0, &type, &freeKb, &fmt);
+    int r = mcResult();
+    mcOK = (r >= -1);                           // 0 o -1: hay tarjeta; menos de -1: no hay o no esta formateada
+}
+static bool saveLoad() {
+    if (!mcOK) return false;
+    mcOpen(0, 0, "BPIGGIES/progreso.dat", FIO_RD);
+    int fd = mcResult();
+    if (fd < 0) return false;
+    SaveData tmp; memset(&tmp, 0, sizeof(tmp));
+    mcRead(fd, &tmp, sizeof(tmp)); int n = mcResult();
+    mcClose(fd); mcResult();
+    if (n != (int)sizeof(tmp) || tmp.magic[0] != 'B' || tmp.magic[1] != 'P' || tmp.magic[2] != 'G' || tmp.magic[3] != '1') return false;
+    sv = tmp;
+    return true;
+}
+static void saveWrite() {
+    if (!mcOK) return;
+    mcMkDir(0, 0, "BPIGGIES"); mcResult();                       // si ya existe da error y no importa
+    mcOpen(0, 0, "BPIGGIES/progreso.dat", FIO_WR | FIO_CREAT | FIO_TRUNC);
+    int fd = mcResult();
+    if (fd < 0) return;
+    mcWrite(fd, &sv, sizeof(sv)); mcResult();
+    mcClose(fd); mcResult();
+}
+static void saveOptions() { sv.opt[0] = optCursor; sv.opt[1] = optMusic; sv.opt[2] = optSfx; saveWrite(); }
+static void recordWin(const Game& g) {      // estrellas y mejor tiempo del nivel que se acaba de ganar
+    int li = g.levelIndex(); if (li < 0 || li >= 16 || g.isSandbox()) return;
+    int st = g.resultStars(); float ft = g.finalTime();
+    if (st > sv.stars[li]) sv.stars[li] = (unsigned char)st;
+    g_newRecord = (sv.best[li] <= 0.f || ft < sv.best[li]);
+    if (g_newRecord) sv.best[li] = ft;
+    g_bestShown = sv.best[li];
+    saveWrite();
+}
+
+
 
 
 static GSGLOBAL* gs;
@@ -95,17 +147,19 @@ static void quadUV(GSTEXTURE& t, float x1, float y1, float x2, float y2, float u
     gsKit_prim_triangle_texture(gs, &t, x2, y1, u2, v1, x2, y2, u2, v2, x1, y2, u1, v2, 1, col);
 }
 // sprite centrado en (cx,cy), tamano w x h (pantalla virtual), girado ang radianes
-static void sprite(GSTEXTURE& t, float cx, float cy, float w, float h, float ang) {
+static void sprite(GSTEXTURE& t, float cx, float cy, float w, float h, float ang, u64 tint = 0) {
     float c = cosf(ang), s = sinf(ang), hw = w * 0.5f, hh = h * 0.5f;
     float lx[4] = { -hw, hw, -hw, hw }, ly[4] = { -hh, -hh, hh, hh };
     float X[4], Y[4];
     for (int i = 0; i < 4; i++) { X[i] = (cx + lx[i] * c - ly[i] * s) * kx; Y[i] = (cy + lx[i] * s + ly[i] * c) * ky; }
     float tw = (float)t.Width, th = (float)t.Height;
-    u64 col = rgba(0x80, 0x80, 0x80, 0x80);
+    u64 col = tint ? tint : rgba(0x80, 0x80, 0x80, 0x80);
     gsKit_prim_triangle_texture(gs, &t, X[0], Y[0], 0, 0, X[1], Y[1], tw, 0, X[2], Y[2], 0, th, 1, col);
     gsKit_prim_triangle_texture(gs, &t, X[1], Y[1], tw, 0, X[3], Y[3], tw, th, X[2], Y[2], 0, th, 1, col);
 }
-static GSTEXTURE& texOf(int type) { return type == P_PIG ? texPig : (type == P_BOX ? texBox : texWheel); }
+static GSTEXTURE& texOf(int type) {
+    switch (type) { case P_PIG: return texPig; case P_BOX: return texBox; case P_WHEEL: return texWheel; case P_FAN: return texDecor[DEC_FAN]; default: return texDecor[DEC_BALLOON]; }
+}
 static void spriteOf(int type, float cx, float cy, float scale, float ang) {
     GSTEXTURE& t = texOf(type);
     sprite(t, cx, cy, t.Width * scale, t.Height * scale, ang);
@@ -160,12 +214,13 @@ struct Track { short* d; int n; };
 static bool audioOK = false;
 static Track mus[MUS_COUNT];
 static int musCur = MUS_NONE, musWant = MUS_NONE;
-static float musPos = 0.f, musFade = 0.f;
-static float fxPosF = 0.f;
+static unsigned musIdx = 0, musFrac = 0;      // posiciones en punto fijo (24 bits de fraccion): sin la deriva de los decimales
+static float musFade = 0.f;
+static unsigned fxIdx = 0, fxFrac = 0;
 static const SoundData* fx = NULL;
 static int idleAvail = 0;                      // capacidad del buffer de audio
 static int targetFill = 12288;                 // bytes que mantenemos en el buffer (~60 ms)
-static const float MUS_STEP = 11025.f / 48000.f, FX_STEP = 22050.f / 48000.f;
+static const unsigned MUS_STEP_FP = 3853517u, FX_STEP_FP = 7707034u;   // 11025/48000 y 22050/48000, por 2^24
 static const float MUSIC_VOL = 0.60f, FX_VOL = 0.90f;
 
 static void loadTrack(Track& t, const unsigned char* src, unsigned bytes) {
@@ -187,24 +242,26 @@ static void audioInit() {
     loadTrack(mus[MUS_FINAL], music_final, size_music_final);
     audioOK = true;
 }
-static void sndPlay(int id) { if (audioOK && optSfx) { fx = &SOUNDS[id]; fxPosF = 0.f; } }
+static void sndPlay(int id) { if (audioOK && optSfx) { fx = &SOUNDS[id]; fxIdx = 0; fxFrac = 0; } }
 static void musicWant(int m) { musWant = optMusic ? m : MUS_NONE; }
 static void mixChunk(short* out, int n) {     // n = cuadros estereo
     for (int i = 0; i < n; i++) {
         float v = 0.f;
         if (musCur != MUS_NONE) {
             const Track& t = mus[musCur];
-            int i0 = (int)musPos, i1 = i0 + 1; if (i1 >= t.n) i1 = 0;
-            float fr = musPos - (float)i0;
+            unsigned i0 = musIdx, i1 = i0 + 1; if (i1 >= (unsigned)t.n) i1 = 0;
+            float fr = (float)(musFrac >> 8) * (1.f / 65536.f);
             v += ((float)t.d[i0] * (1.f - fr) + (float)t.d[i1] * fr) * MUSIC_VOL * musFade;
-            musPos += MUS_STEP; if (musPos >= (float)t.n) musPos -= (float)t.n;
+            musFrac += MUS_STEP_FP; musIdx += musFrac >> 24; musFrac &= 0xFFFFFFu;
+            if (musIdx >= (unsigned)t.n) musIdx -= (unsigned)t.n;
             if (musFade < 1.f) { musFade += 1.f / (48000.f * 0.25f); if (musFade > 1.f) musFade = 1.f; }
         }
         if (fx) {
-            int i0 = (int)fxPosF, i1 = i0 + 1; if (i1 >= fx->samples) i1 = i0;
-            float fr = fxPosF - (float)i0;
+            unsigned i0 = fxIdx, i1 = i0 + 1; if (i1 >= (unsigned)fx->samples) i1 = i0;
+            float fr = (float)(fxFrac >> 8) * (1.f / 65536.f);
             v += ((float)fx->data[i0] * (1.f - fr) + (float)fx->data[i1] * fr) * FX_VOL;
-            fxPosF += FX_STEP; if (fxPosF >= (float)fx->samples) fx = NULL;
+            fxFrac += FX_STEP_FP; fxIdx += fxFrac >> 24; fxFrac &= 0xFFFFFFu;
+            if (fxIdx >= (unsigned)fx->samples) fx = NULL;
         }
         if (v > 32767.f) { v = 32767.f; }
         if (v < -32768.f) { v = -32768.f; }
@@ -213,7 +270,7 @@ static void mixChunk(short* out, int n) {     // n = cuadros estereo
 }
 static void sndPump() {
     if (!audioOK) return;
-    if (musWant != musCur) { musCur = musWant; musPos = 0.f; musFade = 0.f; }   // cambio de cancion con entrada suave
+    if (musWant != musCur) { musCur = musWant; musIdx = 0; musFrac = 0; musFade = 0.f; }   // cambio de cancion con entrada suave
     int fill = idleAvail - audsrv_available();
     int want = targetFill - fill;
     if (want < 256) return;
@@ -357,7 +414,7 @@ static void drawGameUI(const Game& g) {
             rect(sx - 31, sy - 31, sx + 31, sy + 31, cellc);
             frameRect(sx - 31, sy - 31, sx + 31, sy + 31, 1.5f, cellb);
         }
-        for (int i = 0; i < P_COUNT; i++) {   // bandeja: cerdito, caja, rueda; puntos = las que quedan
+        for (int i = 0; i < g.trayCount(); i++) {   // bandeja: cerdito, caja, rueda; puntos = las que quedan
             float sx, sy; g.traySlot(i, sx, sy);
             rect(sx - 30, sy - 30, sx + 30, sy + 30, rgba(0x10, 0x20, 0x30, 0x50));
             spriteOf(i, sx, sy - 4, 0.8f, 0.f);
@@ -372,20 +429,39 @@ static void drawGameUI(const Game& g) {
     } else if (g.mode() == M_PLAY) {
         if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir     Stick derecho: cámara", 0.7f, 255, 255, 255);
         else if (g.time() < 5.f) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
-    } else if (g.mode() == M_WIN || g.mode() == M_LOSE) {
-        bool win = g.mode() == M_WIN;
-        rect(110, 110, 530, 330, rgba(0x10, 0x20, 0x30, 0x60));
-        frameRect(110, 110, 530, 330, 3.f, win ? rgba(0x40, 0xD0, 0x40, 0x80) : rgba(0xD0, 0x40, 0x40, 0x80));
-        textCentered(false, 320, 128, win ? "¡Nivel completado!" : "¡Perdiste!", 1.45f, win ? 140 : 255, win ? 255 : 140, 140);
-        if (win) {
-            textCentered(false, 320, 205, "X: siguiente nivel", 1.1f, 255, 255, 255);
-            textCentered(false, 320, 245, "Círculo: repetir este nivel", 1.1f, 255, 255, 255);
-            textCentered(false, 320, 285, "Triángulo: elegir nivel", 1.1f, 255, 255, 255);
-        } else {
-            textCentered(false, 320, 215, "Círculo: reintentar", 1.1f, 255, 255, 255);
-            textCentered(false, 320, 260, "Triángulo: elegir nivel", 1.1f, 255, 255, 255);
+    } else if (g.mode() == M_WIN) {
+        rect(100, 60, 540, 396, rgba(0x10, 0x20, 0x30, 0x60));
+        frameRect(100, 60, 540, 396, 3.f, rgba(0x40, 0xD0, 0x40, 0x80));
+        textCentered(false, 320, 68, "¡Nivel completado!", 1.45f, 140, 255, 140);
+        const LevelData& LD = g.levelData();
+        static const char* CAP[3] = { "Meta", "Caja estrella", "Tiempo" };
+        bool got[3] = { true, g.starCollected(), LD.parTime > 0.f && g.finalTime() <= LD.parTime };
+        for (int i = 0; i < 3; i++) {
+            float cx = 320 + (i - 1) * 130;
+            sprite(texDecor[DEC_GOLDSTAR], cx, 142, 70, 67, 0, got[i] ? rgba(0x80, 0x80, 0x80, 0x80) : rgba(0x30, 0x30, 0x30, 0x70));
+            textCentered(false, cx, 178, CAP[i], 0.62f, got[i] ? 255 : 160, got[i] ? 255 : 160, got[i] ? 255 : 160);
         }
+        snprintf(buf, sizeof(buf), "Tiempo: %.1f s", g.finalTime());
+        textCentered(false, 320, 206, buf, 1.0f, 255, 255, 255);
+        if (g_newRecord) textCentered(false, 320, 234, "¡Nuevo récord!", 0.9f, 255, 230, 90);
+        else if (g_bestShown > 0.f) { snprintf(buf, sizeof(buf), "Mejor tiempo: %.1f s", g_bestShown); textCentered(false, 320, 234, buf, 0.8f, 220, 220, 220); }
+        if (LD.parTime > 0.f) { snprintf(buf, sizeof(buf), "Estrella de tiempo: %.1f s o menos", LD.parTime); textCentered(false, 320, 262, buf, 0.6f, 200, 200, 200); }
+        textCentered(false, 320, 290, "X: siguiente nivel", 1.0f, 255, 255, 255);
+        textCentered(false, 320, 322, "Círculo: repetir este nivel", 1.0f, 255, 255, 255);
+        textCentered(false, 320, 354, "Triángulo: elegir nivel", 1.0f, 255, 255, 255);
+    } else if (g.mode() == M_LOSE) {
+        rect(110, 110, 530, 330, rgba(0x10, 0x20, 0x30, 0x60));
+        frameRect(110, 110, 530, 330, 3.f, rgba(0xD0, 0x40, 0x40, 0x80));
+        textCentered(false, 320, 128, "¡Perdiste!", 1.45f, 255, 140, 140);
+        textCentered(false, 320, 215, "Círculo: reintentar", 1.1f, 255, 255, 255);
+        textCentered(false, 320, 260, "Triángulo: elegir nivel", 1.1f, 255, 255, 255);
     }
+    if (g.mode() == M_PLAY || g.mode() == M_WIN) {          // cronometro
+        snprintf(buf, sizeof(buf), "Tiempo: %.1f s", g.mode() == M_WIN ? g.finalTime() : g.time());
+        textLeft(468, 22, buf, 0.9f, 255, 255, 255);
+    }
+    if (g.levelData().starX > -1e8f && g.mode() != M_BUILD)   // la caja estrella: icono dorado si ya se recogio
+        sprite(texDecor[DEC_GOLDSTAR], 446, 35, 28, 27, 0, g.starCollected() ? rgba(0x80, 0x80, 0x80, 0x80) : rgba(0x38, 0x38, 0x38, 0x70));
     if (g.isSandbox()) snprintf(buf, sizeof(buf), "Sandbox");
     else snprintf(buf, sizeof(buf), "Nivel %d", g.levelIndex() + 1);
     textLeft(30, 22, buf, 0.9f, 255, 255, 255);
@@ -398,8 +474,12 @@ int main(int, char**) {
     SifInitRpc(0);
     SifLoadModule("rom0:SIO2MAN", 0, NULL);
     SifLoadModule("rom0:PADMAN", 0, NULL);
+    SifLoadModule("rom0:MCMAN", 0, NULL);
+    SifLoadModule("rom0:MCSERV", 0, NULL);
     padInit(0);
     padPortOpen(0, 0, padBuf);
+    saveInit();
+    if (saveLoad()) { optCursor = sv.opt[0] != 0; optMusic = sv.opt[1] != 0; optSfx = sv.opt[2] != 0; }
     audioInit();
 
     gs = gsKit_init_global();
@@ -494,12 +574,12 @@ int main(int, char**) {
                 if (pad.eU && optSel > 0) { optSel--; sndPlay(SND_CLICK); }
                 if (pad.eD && optSel < 3) { optSel++; sndPlay(SND_CLICK); }
             }
-            if (pO) { sndPlay(SND_CLICK); screen = S_TITLE; }
+            if (pO) { sndPlay(SND_CLICK); saveOptions(); screen = S_TITLE; }
             else if (act) {
                 if (optSel == 0) optCursor = !optCursor;
                 else if (optSel == 1) optMusic = !optMusic;
                 else if (optSel == 2) optSfx = !optSfx;
-                else screen = S_TITLE;
+                else { saveOptions(); screen = S_TITLE; }
                 sndPlay(SND_CLICK);
             }
         } else if (screen == S_WORLDS) {
@@ -543,7 +623,8 @@ int main(int, char**) {
                 in.pressX = pX; in.pressSquare = pS; in.pressTriangle = pT; in.pressCircle = pO;
                 game.update(dt, in);
                 unsigned ev = game.takeEvents();
-                if (ev & EV_WIN) sndPlay(SND_WIN);
+                if (ev & EV_WIN) { sndPlay(SND_WIN); recordWin(game); }
+                else if (ev & EV_STAR) sndPlay(SND_STAR);
                 else if (ev & EV_LOSE) sndPlay(SND_LOSE);
                 else if (ev & EV_GO) sndPlay(SND_GO);
                 else if (ev & EV_PLACE) sndPlay(SND_PLACE);
@@ -604,6 +685,7 @@ int main(int, char**) {
             for (int i = 0; i < 15; i++) {
                 float cx = MENU_TX[i % 5], cy = 24 + MENU_TY[i / 5];
                 if (i >= Game::levelCount()) rect(cx - 35, cy - 35, cx + 35, cy + 52, rgba(0x10, 0x20, 0x30, 0x50));   // velo: no existe todavia
+                else for (int k = 0; k < (int)sv.stars[i] && k < 3; k++) sprite(texDecor[DEC_GOLDSTAR], cx + (k - 1) * 17.f, cy + 47, 17, 16, 0);   // estrellas ganadas
                 if (i == sel) {
                     float pulse = 2.f + 2.f * sinf(clock * 6.f);
                     frameRect(cx - 38 - pulse, cy - 38 - pulse, cx + 38 + pulse, cy + 38 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
@@ -632,7 +714,7 @@ int main(int, char**) {
                 textLeft(135, y, LABEL[r], 1.05f, 255, 255, 255);
                 if (r < 3) textLeft(462, y, val[r] ? "Sí" : "No", 1.1f, val[r] ? 140 : 255, val[r] ? 255 : 140, 140);
             }
-            textCentered(false, 320, 340, "Las opciones no se guardan al apagar la consola", 0.6f, 220, 220, 220);
+            textCentered(false, 320, 340, mcOK ? "Se guarda en la memory card de la ranura 1" : "Sin memory card: el progreso no se guarda", 0.6f, mcOK ? 170 : 255, mcOK ? 255 : 170, 170);
             textCentered(false, 320, 396, "X: cambiar     Círculo: volver", 0.8f, 255, 255, 255);
         } else {
             drawDecor(game, 0);
@@ -642,6 +724,14 @@ int main(int, char**) {
                 const LevelData& L = game.levelData();
                 float fx, fy; worldToScreen(game, L.goalX, L.goalY - 57.f, fx, fy);
                 sprite(texFlag, fx, fy, texFlag.Width * ZOOM, texFlag.Height * ZOOM, 0.f);
+            }
+            {   // caja estrella
+                float bx, by;
+                if (game.starBox(bx, by)) {
+                    float sx, sy; worldToScreen(game, bx, by, sx, sy);
+                    GSTEXTURE& tb = texDecor[DEC_STARBOX];
+                    sprite(tb, sx, sy + sinf(clock * 3.f) * 3.f, tb.Width * 1.1f, tb.Height * 1.1f, 0.f);
+                }
             }
             DrawItem items[16]; int n = game.drawList(items, 16);
             for (int i = 0; i < n; i++) {

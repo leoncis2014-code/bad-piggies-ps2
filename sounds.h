@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 typedef struct { const short* data; int samples; } SoundData;
-enum { SND_CLICK, SND_PLACE, SND_GO, SND_WIN, SND_LOSE, SND_COUNT };
+enum { SND_CLICK, SND_PLACE, SND_GO, SND_WIN, SND_LOSE, SND_STAR, SND_COUNT };
 extern const SoundData SOUNDS[SND_COUNT];
 #ifdef __cplusplus
 }

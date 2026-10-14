@@ -11,7 +11,7 @@ EE_CFLAGS += -O2
 EE_CXXFLAGS += -O2 -fno-exceptions -fno-rtti -std=gnu++11 -Wno-psabi
 # Si el sonido diera problemas, quitar el simbolo # de la linea siguiente para compilar sin sonido:
 # EE_CXXFLAGS += -DNO_AUDIO
-EE_LIBS += -lgskit -ldmakit -lpad -laudsrv -lm -lstdc++
+EE_LIBS += -lgskit -ldmakit -lpad -laudsrv -lmc -lm -lstdc++
 
 all: $(EE_BIN)
 

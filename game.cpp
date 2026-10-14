@@ -8,7 +8,8 @@ static const float CELL = 31.f;           // px por celda (= 1 m)
 static const int   COLS = 3, ROWS = 2;
 static const float WHEEL_R = 0.355f;     // radio de la rueda (m)
 static const float WHEEL_DROP = 0.25f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
-static const float TRAY_Y = 380.f, TRAY_X0 = 250.f, TRAY_DX = 70.f, TRAY_R = 28.f;
+static const float TRAY_Y = 380.f, TRAY_DX = 70.f, TRAY_R = 28.f;
+static float trayX(int i, int n) { return 320.f + ((float)i - (float)(n - 1) * 0.5f) * TRAY_DX; }
 
 struct Piece { int type; int col, row; };
 
@@ -22,7 +23,9 @@ public:
     float cx = 320, cy = 224;
     float camx, camy;
     float t = 0, stuck = 0, flip = 0;
-    float lookOX = 0, lookOY = 0;           // desplazamiento de la camara libre (px)
+    float lookOX = 0, lookOY = 0;
+    bool starGot = false; float finalT = 0; int resStars = 0;
+    float totalMass = 1.f;                  // masa del vehiculo (chasis + ruedas), para escalar el empuje           // desplazamiento de la camara libre (px)
     const LevelData* L = &LEVELS[0];
     int levelIdx = 0;
     unsigned events = 0;
@@ -50,9 +53,10 @@ public:
         if (full) {
             for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) { cells[r][c] = -1; pig[r][c] = false; }
             bool sbx = (L->flags & 1) != 0;       // sandbox: piezas ilimitadas
-            left[P_PIG] = sbx ? 99 : 1; left[P_BOX] = sbx ? 99 : 3; left[P_WHEEL] = sbx ? 99 : 2; sel = P_BOX;
+            left[P_PIG] = sbx ? 99 : 1; left[P_BOX] = sbx ? 99 : 3; left[P_WHEEL] = sbx ? 99 : 2;
+            left[P_FAN] = sbx ? 99 : 0; left[P_BALLOON] = sbx ? 99 : 0; sel = P_BOX;
         }
-        mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0;
+        mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0; starGot = false; resStars = 0; finalT = 0;
         camx = gx(); camy = gy() - 10.f;
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
@@ -69,9 +73,11 @@ public:
         }
         return 0;
     }
+    int trayN() const { return (L->flags & 1) ? P_COUNT : 3; }
     int trayAt(float sx, float sy) const {
-        for (int i = 0; i < P_COUNT; i++)
-            if (fabsf(sx - (TRAY_X0 + i * TRAY_DX)) <= TRAY_R && fabsf(sy - TRAY_Y) <= TRAY_R) return i;
+        int n = trayN();
+        for (int i = 0; i < n; i++)
+            if (fabsf(sx - trayX(i, n)) <= TRAY_R && fabsf(sy - TRAY_Y) <= TRAY_R) return i;
         return -1;
     }
 
@@ -96,6 +102,12 @@ public:
         for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
             int tp = cells[r][c];
             float lx = (c - 1) * 1.f, ly = (r - 0.5f) * 1.f;
+            if (tp == P_FAN || tp == P_BALLOON) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
+                b2PolygonShape fs; fs.SetAsBox(0.36f, 0.36f, b2Vec2(lx, ly), 0.f);
+                b2FixtureDef ff; ff.shape = &fs; ff.density = 0.35f; ff.friction = 0.3f; ff.restitution = 0.1f;
+                chassis->CreateFixture(&ff);
+                continue;
+            }
             if (tp != P_BOX) {
                 if (tp < 0 && pig[r][c]) {   // cerdito suelto, sin caja: es un blanco facil
                     b2PolygonShape ps; ps.SetAsBox(0.40f, 0.40f, b2Vec2(lx, ly), 0.f);
@@ -130,6 +142,9 @@ public:
             wheels[nwheels] = w; wheelCell[nwheels][0] = c; wheelCell[nwheels][1] = r; nwheels++;
         }
         // empujon inicial para salir de la plataforma
+        totalMass = chassis->GetMass();
+        for (int i = 0; i < nwheels; i++) totalMass += wheels[i]->GetMass();
+        if (totalMass < 0.5f) totalMass = 0.5f;
         // arranque: solo con 2 o mas ruedas el vehiculo sale rodando; sin ruedas se queda parado y pierdes
         if (nwheels >= 2) {
             b2Vec2 kick(3.5f, 0.f);
@@ -156,7 +171,7 @@ public:
                 if (ti >= 0) { sel = ti; events |= EV_CLICK; }
                 else if (cellAt(cx, cy, col, row) && left[sel] > 0) {
                     if (sel == P_PIG) {
-                        if (cells[row][col] != P_WHEEL && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; events |= EV_PLACE; }
+                        if (cells[row][col] != P_WHEEL && cells[row][col] != P_FAN && cells[row][col] != P_BALLOON && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; events |= EV_PLACE; }
                     } else if (cells[row][col] < 0) { cells[row][col] = sel; left[sel]--; events |= EV_PLACE; }
                 }
             }
@@ -169,18 +184,38 @@ public:
         }
         if (in.pressCircle) { reset(false); return; }
         if (mode != M_PLAY) return;
+        // ventilador: empuja hacia adelante; globo: levanta
+        int nthr = 0;
+        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+            int tp = cells[r][c];
+            if (tp != P_FAN && tp != P_BALLOON) continue;
+            nthr++;
+            if (tp == P_FAN) { float a = chassis->GetAngle(); chassis->ApplyForceToCenter((4.0f * totalMass) * b2Vec2(cosf(a), sinf(a)), true); }   // ~4 m/s2 por ventilador
+            else chassis->ApplyForceToCenter(b2Vec2(0.f, -0.35f * 10.f * totalMass), true);                                                    // cada globo levanta el 35% del peso
+        }
+        chassis->SetLinearDamping(nthr > 0 ? 0.25f : 0.f);
         world->Step(dt, 8, 3);
         t += dt;
         b2Vec2 p = pigWorld();
         float px = p.x * PPM, py = p.y * PPM;
         // camara suave + camara libre con el analogico derecho
         lookOX += (in.lookX * 220.f - lookOX) * 0.12f; lookOY += (in.lookY * 140.f - lookOY) * 0.12f;
-        camx += (px + lookOX - camx) * 0.08f; camy += (py - 20.f + lookOY - camy) * 0.08f;
+        camx += (px + lookOX - camx) * 0.08f; camy += (py + 30.f + lookOY - camy) * 0.08f;
         if (L->flags & 1) {                       // sandbox: se juega libremente, sin meta ni derrota
             if (py > 1200.f) reset(false);        // si cae al vacio, vuelve a construir
             return;
         }
-        if (px >= L->goalX) { mode = M_WIN; events |= EV_WIN; return; }
+        if (!starGot && L->starX > -1e8f) {     // caja estrella: se recoge al tocarla con el vehiculo
+            float sx = L->starX / PPM, sy = L->starY / PPM, rr = 0.95f;
+            bool hit = (chassis->GetPosition() - b2Vec2(sx, sy)).Length() < rr;
+            for (int i = 0; i < nwheels && !hit; i++) hit = (wheels[i]->GetPosition() - b2Vec2(sx, sy)).Length() < rr;
+            if (hit) { starGot = true; events |= EV_STAR; }
+        }
+        if (px >= L->goalX) {
+            mode = M_WIN; events |= EV_WIN; finalT = t;
+            resStars = 1 + (starGot ? 1 : 0) + ((L->parTime > 0.f && t <= L->parTime) ? 1 : 0);
+            return;
+        }
         // volcado: boca abajo mas de 1.5 s = pierdes
         flip = (cosf(chassis->GetAngle()) < -0.25f) ? flip + dt : 0.f;
         if (flip > 1.5f) { mode = M_LOSE; events |= EV_LOSE; return; }
@@ -246,5 +281,10 @@ int Game::remaining(int t) const { return g->left[t]; }
 bool Game::cellPiece(int col, int row, int& type) const { type = g->cells[row][col]; return type >= 0; }
 bool Game::cellHasPig(int col, int row) const { return g->pig[row][col]; }
 void Game::cellScreen(int col, int row, float& sx, float& sy) const { g->toScreen(g->cellX(col), g->cellY(row), sx, sy); }
-void Game::traySlot(int i, float& sx, float& sy) const { sx = TRAY_X0 + i * TRAY_DX; sy = TRAY_Y; }
+void Game::traySlot(int i, float& sx, float& sy) const { sx = trayX(i, g->trayN()); sy = TRAY_Y; }
+int Game::trayCount() const { return g->trayN(); }
+bool Game::starBox(float& x, float& y) const { if (g->L->starX < -1e8f || g->starGot) return false; x = g->L->starX; y = g->L->starY; return true; }
+bool Game::starCollected() const { return g->starGot; }
+int Game::resultStars() const { return g->resStars; }
+float Game::finalTime() const { return g->finalT; }
 float Game::time() const { return g->t; }

@@ -22,5 +22,7 @@ struct LevelData {
     const DecorItem* decor;
     int texW, texH;                    // textura de la roca (la mitad de resolucion)
     float texOX, texOY, texScale;      // u = (x - texOX) * texScale, v = (y - texOY) * texScale
+    float starX, starY;                // caja estrella (centro); starX < -1e8 = no hay
+    float parTime;                     // tercera estrella: terminar en este tiempo o menos (s); 0 = sin
     int flags;                         // bit0: sandbox (piezas ilimitadas, sin meta ni derrota); texW = 0: terreno liso sin textura
 };

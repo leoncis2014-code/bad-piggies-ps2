@@ -3,7 +3,7 @@
 #include <vector>
 #include "level.h"
 
-enum PieceType { P_PIG = 0, P_BOX = 1, P_WHEEL = 2, P_COUNT = 3 };
+enum PieceType { P_PIG = 0, P_BOX = 1, P_WHEEL = 2, P_FAN = 3, P_BALLOON = 4, P_COUNT = 5 };   // ventilador y globo: solo en el sandbox
 enum Mode { M_BUILD, M_PLAY, M_WIN, M_LOSE };
 
 struct GameInput {
@@ -12,7 +12,7 @@ struct GameInput {
     bool pressX = false, pressSquare = false, pressTriangle = false, pressCircle = false; // flancos
 };
 
-enum GameEvent { EV_CLICK = 1, EV_PLACE = 2, EV_GO = 4, EV_WIN = 8, EV_LOSE = 16 };
+enum GameEvent { EV_CLICK = 1, EV_PLACE = 2, EV_GO = 4, EV_WIN = 8, EV_LOSE = 16, EV_STAR = 32 };
 
 struct DrawItem { int type; float x, y, angle; };   // en pixeles de nivel, angulo en radianes (horario en pantalla)
 
@@ -44,6 +44,11 @@ public:
     void cellScreen(int col, int row, float& sx, float& sy) const;
     void traySlot(int i, float& sx, float& sy) const;     // centro del icono de bandeja en pantalla
     float time() const;
+    int  trayCount() const;                    // piezas visibles en la bandeja (3, o 5 en el sandbox)
+    bool starBox(float& x, float& y) const;    // caja estrella visible (aun no recogida)
+    bool starCollected() const;
+    int  resultStars() const;                  // estrellas ganadas al terminar el nivel (1..3)
+    float finalTime() const;                   // tiempo al llegar a la meta
 private:
     GameImpl* g;
 };

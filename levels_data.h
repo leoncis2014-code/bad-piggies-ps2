@@ -630,8 +630,8 @@ static const DecorItem L2_DECOR[] = {
 };
 
 static const LevelData LEVELS[] = {
-  { 40, L1_PTS, L1_TOP, 1, L1_RINGS, 38, L1_TRIS, 300.0f, 148.5f, 700.0f, 449.8f, 560.0f, 20, L1_DECOR, 393, 165, 0.0f, 166.0f, 0.500f, 0 },
-  { 334, L2_PTS, L2_TOP, 1, L2_RINGS, 74, L2_TRIS, 0.0f, 182.0f, 99999.0f, 0.0f, 5000.0f, 94, L2_DECOR, 0, 0, 0.0f, 0.0f, 0.000f, 1 }
+  { 40, L1_PTS, L1_TOP, 1, L1_RINGS, 38, L1_TRIS, 300.0f, 148.5f, 700.0f, 449.8f, 560.0f, 20, L1_DECOR, 393, 165, 0.0f, 166.0f, 0.500f, 560.0f, 316.0f, 3.00f, 0 },
+  { 334, L2_PTS, L2_TOP, 1, L2_RINGS, 74, L2_TRIS, 0.0f, 182.0f, 99999.0f, 0.0f, 5000.0f, 94, L2_DECOR, 0, 0, 0.0f, 0.0f, 0.000f, -1000000000.0f, 0.0f, 0.00f, 1 }
 };
 static const int NUM_LEVELS_DATA = 2;      // el ultimo es el sandbox
 static const int NUM_STORY_LEVELS = 1;
