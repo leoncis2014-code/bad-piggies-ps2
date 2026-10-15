@@ -24,6 +24,8 @@ extern unsigned int size_audsrv_irx;
 extern "C" {
 extern unsigned char decor_raw[]; extern unsigned int size_decor_raw;
 extern unsigned char terrain1_raw[]; extern unsigned int size_terrain1_raw;
+extern unsigned char icon_sys[]; extern unsigned int size_icon_sys;
+extern unsigned char icon_ico[]; extern unsigned int size_icon_ico;
 extern unsigned char screen_title[]; extern unsigned int size_screen_title;
 extern unsigned char screen_worlds[]; extern unsigned int size_screen_worlds;
 extern unsigned char screen_levels[]; extern unsigned int size_screen_levels;
@@ -76,9 +78,24 @@ static bool saveLoad() {
     sv = tmp;
     return true;
 }
+static bool writeFile(const char* path, const void* data, int size) {
+    mcOpen(0, 0, path, FIO_WR | FIO_CREAT | FIO_TRUNC);
+    int fd = mcResult();
+    if (fd < 0) return false;
+    mcWrite(fd, data, size); mcResult();
+    mcClose(fd); mcResult();
+    return true;
+}
+static void saveIconIfMissing() {           // el icono (un cerdito) que muestra el explorador de la memory card
+    mcOpen(0, 0, "BPIGGIES/icon.sys", FIO_RD);
+    int fd = mcResult();
+    if (fd >= 0) { mcClose(fd); mcResult(); return; }
+    if (writeFile("BPIGGIES/icon.sys", icon_sys, (int)size_icon_sys)) writeFile("BPIGGIES/bpiggies.ico", icon_ico, (int)size_icon_ico);
+}
 static void saveWrite() {
     if (!mcOK) return;
     mcMkDir(0, 0, "BPIGGIES"); mcResult();                       // si ya existe da error y no importa
+    saveIconIfMissing();
     mcOpen(0, 0, "BPIGGIES/progreso.dat", FIO_WR | FIO_CREAT | FIO_TRUNC);
     int fd = mcResult();
     if (fd < 0) return;
@@ -340,7 +357,8 @@ static void screenDraw(int idx) {            // la imagen es 640x400: va centrad
 // ---------------------------------------------------------------- dibujo del juego
 static void worldToScreen(const Game& g, float wx, float wy, float& sx, float& sy) {
     float cx, cy; g.camera(cx, cy);
-    sx = (wx - cx) * ZOOM + SCREEN_W * 0.5f; sy = (wy - cy) * ZOOM + SCREEN_H * 0.5f;
+    float z = g.zoomNow();
+    sx = (wx - cx) * z + SCREEN_W * 0.5f; sy = (wy - cy) * z + SCREEN_H * 0.5f;
 }
 
 static void drawDecor(const Game& g, int layer) {
@@ -350,7 +368,8 @@ static void drawDecor(const Game& g, int layer) {
         if (d.layer != layer) continue;
         float sx, sy; worldToScreen(g, d.x, d.y, sx, sy);
         GSTEXTURE& t = texDecor[d.type];
-        float w = t.Width * d.scale, h = t.Height * d.scale, hh = h * 0.5f;
+        float zf = g.zoomNow() / ZOOM;
+        float w = t.Width * d.scale * zf, h = t.Height * d.scale * zf, hh = h * 0.5f;
         if (sx < -w - 40 || sx > SCREEN_W + w + 40) continue;     // fuera de pantalla
         sprite(t, sx + hh * sinf(d.angle), sy - hh * cosf(d.angle), w, h, d.angle);   // la base queda apoyada en (x,y)
     }
@@ -395,7 +414,8 @@ static void drawTerrain(const Game& g) {
             float dx = X[j] - X[i], dy = Y[j] - Y[i], ln = sqrtf(dx * dx + dy * dy);
             if (ln < 0.01f) continue;
             float nx = dy / ln, ny = -dx / ln;                          // normal hacia el aire
-            const float O = 5.f, M = -1.f, I = -9.f;
+            float zf = g.zoomNow() / ZOOM;
+            const float O = 5.f * zf, M = -1.f * zf, I = -9.f * zf;
             float ox1 = X[i] + nx * O, oy1 = Y[i] + ny * O, ox2 = X[j] + nx * O, oy2 = Y[j] + ny * O;
             float mx1 = X[i] + nx * M, my1 = Y[i] + ny * M, mx2 = X[j] + nx * M, my2 = Y[j] + ny * M;
             float ix1 = X[i] + nx * I, iy1 = Y[i] + ny * I, ix2 = X[j] + nx * I, iy2 = Y[j] + ny * I;
@@ -409,10 +429,18 @@ static void drawGameUI(const Game& g) {
     char buf[64];
     if (g.mode() == M_BUILD) {
         u64 cellc = rgba(0xFF, 0xFF, 0xFF, 0x24), cellb = rgba(0xFF, 0xFF, 0xFF, 0x60);
-        for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) {
-            float sx, sy; g.cellScreen(c, r, sx, sy);
-            rect(sx - 31, sy - 31, sx + 31, sy + 31, cellc);
-            frameRect(sx - 31, sy - 31, sx + 31, sy + 31, 1.5f, cellb);
+        if (g.gridCols() > 3) {   // rejilla grande (sandbox 16x16): un fondo y lineas finas, en vez de 256 recuadros
+            float ax, ay, bx, by, half = 31.f * g.zoomNow() * 0.5f;
+            g.cellScreen(0, 0, ax, ay); g.cellScreen(g.gridCols() - 1, g.gridRows() - 1, bx, by);
+            rect(ax - half, ay - half, bx + half, by + half, cellc);
+            for (int c = 0; c <= g.gridCols(); c++) { float x = ax - half + c * 2.f * half; rect(x - 0.6f, ay - half, x + 0.6f, by + half, cellb); }
+            for (int r = 0; r <= g.gridRows(); r++) { float y = ay - half + r * 2.f * half; rect(ax - half, y - 0.6f, bx + half, y + 0.6f, cellb); }
+        } else {
+            for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) {
+                float sx, sy; g.cellScreen(c, r, sx, sy);
+                rect(sx - 31, sy - 31, sx + 31, sy + 31, cellc);
+                frameRect(sx - 31, sy - 31, sx + 31, sy + 31, 1.5f, cellb);
+            }
         }
         for (int i = 0; i < g.trayCount(); i++) {   // bandeja: cerdito, caja, rueda; puntos = las que quedan
             float sx, sy; g.traySlot(i, sx, sy);
@@ -427,7 +455,12 @@ static void drawGameUI(const Game& g) {
         tri(cx, cy, cx + 14, cy + 6, cx + 6, cy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
         tri(cx + 1, cy + 1, cx + 11, cy + 6, cx + 6, cy + 11, rgba(0x20, 0x20, 0x20, 0x80));
     } else if (g.mode() == M_PLAY) {
-        if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir     Stick derecho: cámara", 0.7f, 255, 255, 255);
+        if (g.isSandbox()) {
+            textCentered(false, 320, 408, "Cuadrado: ventilador   X: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
+            char b2[48];
+            if (g.fanCount() > 0) textLeft(30, 48, g.fansOn() ? "Ventilador: ENCENDIDO" : "Ventilador: APAGADO", 0.75f, g.fansOn() ? 150 : 255, g.fansOn() ? 255 : 150, 150);
+            if (g.balloonsLeft() > 0) { snprintf(b2, sizeof(b2), "Globos: %d", g.balloonsLeft()); textLeft(30, 72, b2, 0.75f, 255, 200, 200); }
+        }
         else if (g.time() < 5.f) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
     } else if (g.mode() == M_WIN) {
         rect(100, 60, 540, 396, rgba(0x10, 0x20, 0x30, 0x60));
@@ -730,13 +763,13 @@ int main(int, char**) {
                 if (game.starBox(bx, by)) {
                     float sx, sy; worldToScreen(game, bx, by, sx, sy);
                     GSTEXTURE& tb = texDecor[DEC_STARBOX];
-                    sprite(tb, sx, sy + sinf(clock * 3.f) * 3.f, tb.Width * 1.1f, tb.Height * 1.1f, 0.f);
+                    sprite(tb, sx, sy + sinf(clock * 3.f) * 3.f, tb.Width * 1.1f * (game.zoomNow() / ZOOM), tb.Height * 1.1f * (game.zoomNow() / ZOOM), 0.f);
                 }
             }
-            DrawItem items[16]; int n = game.drawList(items, 16);
+            static DrawItem items[768]; int n = game.drawList(items, 768);
             for (int i = 0; i < n; i++) {
                 float sx, sy; worldToScreen(game, items[i].x, items[i].y, sx, sy);
-                spriteOf(items[i].type, sx, sy, items[i].type == P_PIG ? 0.8f : 1.f, items[i].angle);
+                spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);
         }

@@ -5,7 +5,8 @@
 #include <string.h>
 
 static const float CELL = 31.f;           // px por celda (= 1 m)
-static const int   COLS = 3, ROWS = 2;
+static const int   MAXC = 16, MAXR = 16;          // tamano maximo de la rejilla (el sandbox usa 16x16; los niveles, 3x2)
+static const float BUILD_ZOOM = 0.65f;             // zoom de construccion en el sandbox (para que entren las 16x16 casillas)
 static const float WHEEL_R = 0.355f;     // radio de la rueda (m)
 static const float WHEEL_DROP = 0.25f;   // la rueda cuelga: su fondo queda al nivel del fondo de la celda (m)
 static const float TRAY_Y = 380.f, TRAY_DX = 70.f, TRAY_R = 28.f;
@@ -15,8 +16,8 @@ struct Piece { int type; int col, row; };
 
 class GameImpl {
 public:
-    int cells[ROWS][COLS];      // base: -1 vacio, P_BOX o P_WHEEL
-    bool pig[ROWS][COLS];       // cerdito colocado dentro de una caja
+    int cells[MAXR][MAXC];      // base: -1 vacio, P_BOX o P_WHEEL
+    bool pig[MAXR][MAXC];       // cerdito colocado dentro de una caja
     int left[P_COUNT];
     int sel = P_BOX;
     Mode mode = M_BUILD;
@@ -31,45 +32,55 @@ public:
     unsigned events = 0;
     b2World* world = nullptr;
     b2Body* chassis = nullptr;
-    b2Body* wheels[ROWS*COLS];
+    b2Body* wheels[MAXR*MAXC];
     int nwheels = 0;
-    int wheelCell[ROWS*COLS][2];
+    bool fansOn = true;
+    bool popped[MAXR][MAXC];
+    b2Fixture* thrFx[MAXR][MAXC];
+    int wheelCell[MAXR*MAXC][2];
 
     GameImpl() { memset(wheels, 0, sizeof(wheels)); reset(true); }
     ~GameImpl() { delete world; }
 
-    float gx() const { return L->gridX0 + CELL; }                 // centro horizontal de la rejilla (px)
-    float gy() const { return L->gridYB - CELL * 0.5f; }          // centro vertical (px)
+    int cols() const { return (L->flags & 1) ? 16 : 3; }
+    int rows() const { return (L->flags & 1) ? 16 : 2; }
+    float lxOf(int c) const { return (float)c - (float)(cols() - 1) * 0.5f; }      // posicion de la celda respecto del centro de la rejilla (m)
+    float lyOf(int r) const { return (float)r - (float)(rows() - 1) * 0.5f; }
+    float zoom() const { return ((L->flags & 1) && mode == M_BUILD) ? BUILD_ZOOM : ZOOM; }
+    float gx() const { return L->gridX0 + (cols() - 1) * 0.5f * CELL; }                 // centro horizontal de la rejilla (px)
+    float gy() const { return L->gridYB - (rows() - 1) * 0.5f * CELL; }          // centro vertical (px)
     float cellX(int col) const { return L->gridX0 + col * CELL; }
-    float cellY(int row) const { return L->gridYB - (ROWS - 1 - row) * CELL; }
+    float cellY(int row) const { return L->gridYB - (rows() - 1 - row) * CELL; }
 
     void toScreen(float wx, float wy, float& sx, float& sy) const {
-        sx = (wx - camx) * ZOOM + SCREEN_W * 0.5f;
-        sy = (wy - camy) * ZOOM + SCREEN_H * 0.5f;
+        sx = (wx - camx) * zoom() + SCREEN_W * 0.5f;
+        sy = (wy - camy) * zoom() + SCREEN_H * 0.5f;
     }
 
     void reset(bool full) {
         delete world; world = nullptr; chassis = nullptr; nwheels = 0;
         if (full) {
-            for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) { cells[r][c] = -1; pig[r][c] = false; }
+            for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) { cells[r][c] = -1; pig[r][c] = false; }
             bool sbx = (L->flags & 1) != 0;       // sandbox: piezas ilimitadas
             left[P_PIG] = sbx ? 99 : 1; left[P_BOX] = sbx ? 99 : 3; left[P_WHEEL] = sbx ? 99 : 2;
             left[P_FAN] = sbx ? 99 : 0; left[P_BALLOON] = sbx ? 99 : 0; sel = P_BOX;
         }
         mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0; starGot = false; resStars = 0; finalT = 0;
-        camx = gx(); camy = gy() - 10.f;
+        camx = gx(); camy = (L->flags & 1) ? gy() + 60.f : gy() - 10.f;     // sandbox: la rejilla sube en pantalla para no taparla con la bandeja
+        fansOn = true;
+        for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { popped[r][c] = false; thrFx[r][c] = nullptr; }
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
 
     bool hasPig() const {
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) if (pig[r][c]) return true;
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) if (pig[r][c]) return true;
         return false;
     }
 
     int cellAt(float sx, float sy, int& col, int& row) const {
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             float px, py; toScreen(cellX(c), cellY(r), px, py);
-            if (fabsf(sx - px) <= CELL * ZOOM * 0.5f && fabsf(sy - py) <= CELL * ZOOM * 0.5f) { col = c; row = r; return 1; }
+            if (fabsf(sx - px) <= CELL * zoom() * 0.5f && fabsf(sy - py) <= CELL * zoom() * 0.5f) { col = c; row = r; return 1; }
         }
         return 0;
     }
@@ -99,13 +110,13 @@ public:
         cd.allowSleep = false;
         chassis = world->CreateBody(&cd);
         nwheels = 0;
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             int tp = cells[r][c];
-            float lx = (c - 1) * 1.f, ly = (r - 0.5f) * 1.f;
+            float lx = lxOf(c), ly = lyOf(r);
             if (tp == P_FAN || tp == P_BALLOON) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
                 b2PolygonShape fs; fs.SetAsBox(0.36f, 0.36f, b2Vec2(lx, ly), 0.f);
                 b2FixtureDef ff; ff.shape = &fs; ff.density = 0.35f; ff.friction = 0.3f; ff.restitution = 0.1f;
-                chassis->CreateFixture(&ff);
+                thrFx[r][c] = chassis->CreateFixture(&ff);
                 continue;
             }
             if (tp != P_BOX) {
@@ -129,7 +140,7 @@ public:
                 chassis->CreateFixture(&pf);
             }
         }
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             if (cells[r][c] != P_WHEEL) continue;
             b2BodyDef wd; wd.type = b2_dynamicBody; wd.allowSleep = false;
             wd.position.Set(cellX(c) / PPM, cellY(r) / PPM + WHEEL_DROP);
@@ -154,9 +165,15 @@ public:
         mode = M_PLAY; t = 0; stuck = 0; events |= EV_GO;
     }
 
+    void popBalloon() {
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++)
+            if (cells[r][c] == P_BALLOON && !popped[r][c] && thrFx[r][c]) {
+                popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; events |= EV_PLACE; return;
+            }
+    }
     b2Vec2 pigWorld() const {
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++)
-            if (pig[r][c]) return chassis->GetWorldPoint(b2Vec2((c - 1) * 1.f, (r - 0.5f) * 1.f));
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++)
+            if (pig[r][c]) return chassis->GetWorldPoint(b2Vec2(lxOf(c), lyOf(r)));
         return chassis->GetPosition();
     }
 
@@ -184,12 +201,16 @@ public:
         }
         if (in.pressCircle) { reset(false); return; }
         if (mode != M_PLAY) return;
+        if (in.pressSquare) { fansOn = !fansOn; events |= EV_CLICK; }          // cuadrado: ventilador encendido / apagado
+        if (in.pressX) popBalloon();                                            // X: pincha un globo
         // ventilador: empuja hacia adelante; globo: levanta
         int nthr = 0;
-        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             int tp = cells[r][c];
             if (tp != P_FAN && tp != P_BALLOON) continue;
+            if (tp == P_BALLOON && popped[r][c]) continue;
             nthr++;
+            if (tp == P_FAN && !fansOn) continue;
             if (tp == P_FAN) { float a = chassis->GetAngle(); chassis->ApplyForceToCenter((4.0f * totalMass) * b2Vec2(cosf(a), sinf(a)), true); }   // ~4 m/s2 por ventilador
             else chassis->ApplyForceToCenter(b2Vec2(0.f, -0.35f * 10.f * totalMass), true);                                                    // cada globo levanta el 35% del peso
         }
@@ -232,14 +253,15 @@ public:
         bool playing = (mode != M_BUILD) && chassis;
         // pasada 1: cajas y ruedas (build) | pasada 2: cerditos
         for (int pass = 0; pass < 2; pass++)
-            for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
                 if (n >= max) break;
-                float lx = (c - 1) * 1.f, ly = (r - 0.5f) * 1.f;
+                float lx = lxOf(c), ly = lyOf(r);
                 if (pass == 0) {
                     int tp = cells[r][c];
                     if (tp < 0) continue;
                     if (playing) {
                         if (tp == P_WHEEL) continue;                  // las ruedas se dibujan aparte
+                        if (tp == P_BALLOON && popped[r][c]) continue;  // globo pinchado
                         b2Vec2 w = chassis->GetWorldPoint(b2Vec2(lx, ly));
                         out[n].type = tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle(); n++;
                     } else {
@@ -268,6 +290,12 @@ bool Game::loadLevel(int i) { if (i < 0 || i >= NUM_LEVELS_DATA) return false; g
 int Game::levelIndex() const { return g->levelIdx; }
 int Game::levelCount() { return NUM_STORY_LEVELS; }
 int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }
+float Game::zoomNow() const { return g->zoom(); }
+int Game::gridCols() const { return g->cols(); }
+int Game::gridRows() const { return g->rows(); }
+bool Game::fansOn() const { return g->fansOn; }
+int Game::balloonsLeft() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BALLOON && !g->popped[r][c]) n++; return n; }
+int Game::fanCount() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_FAN) n++; return n; }
 bool Game::isSandbox() const { return (g->L->flags & 1) != 0; }
 const LevelData& Game::levelData() const { return *g->L; }
 unsigned Game::takeEvents() { unsigned e = g->events; g->events = 0; return e; }

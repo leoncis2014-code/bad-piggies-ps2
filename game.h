@@ -30,6 +30,12 @@ public:
     static int levelCount();                   // niveles de historia disponibles (sin el sandbox)
     static int sandboxIndex();                 // indice del nivel sandbox
     bool isSandbox() const;
+    int  gridCols() const;
+    int  gridRows() const;
+    float zoomNow() const;                     // zoom actual (2 en juego; menor al construir en el sandbox)
+    bool fansOn() const;
+    int  balloonsLeft() const;
+    int  fanCount() const;
     const LevelData& levelData() const;
     unsigned takeEvents();                     // eventos de sonido desde la ultima llamada
     void update(float dt, const GameInput& in);
