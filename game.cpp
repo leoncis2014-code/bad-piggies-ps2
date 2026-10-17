@@ -42,11 +42,15 @@ public:
     GameImpl() { memset(wheels, 0, sizeof(wheels)); reset(true); }
     ~GameImpl() { delete world; }
 
-    int cols() const { return (L->flags & 1) ? 16 : 3; }
-    int rows() const { return (L->flags & 1) ? 16 : 2; }
+    int cols() const { return L->gridCols; }
+    int rows() const { return L->gridRows; }
     float lxOf(int c) const { return (float)c - (float)(cols() - 1) * 0.5f; }      // posicion de la celda respecto del centro de la rejilla (m)
     float lyOf(int r) const { return (float)r - (float)(rows() - 1) * 0.5f; }
-    float zoom() const { return ((L->flags & 1) && mode == M_BUILD) ? BUILD_ZOOM : ZOOM; }
+    float zoom() const {                      // al construir se aleja lo necesario para que entre toda la rejilla
+        if (mode != M_BUILD) return ZOOM;
+        float z = 560.f / ((float)cols() * CELL);
+        return z < ZOOM ? z : ZOOM;
+    }
     float gx() const { return L->gridX0 + (cols() - 1) * 0.5f * CELL; }                 // centro horizontal de la rejilla (px)
     float gy() const { return L->gridYB - (rows() - 1) * 0.5f * CELL; }          // centro vertical (px)
     float cellX(int col) const { return L->gridX0 + col * CELL; }
@@ -61,13 +65,12 @@ public:
         delete world; world = nullptr; chassis = nullptr; nwheels = 0;
         if (full) {
             for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) { cells[r][c] = -1; pig[r][c] = false; }
-            bool sbx = (L->flags & 1) != 0;       // sandbox: piezas ilimitadas
-            left[P_PIG] = sbx ? 99 : 1; left[P_BOX] = sbx ? 99 : 3; left[P_WHEEL] = sbx ? 99 : 2;
-            left[P_FAN] = sbx ? 99 : 0; left[P_BALLOON] = sbx ? 99 : 0; sel = P_BOX;
+            for (int k = 0; k < P_COUNT; k++) left[k] = L->pieces[k];
+            sel = L->pieces[P_BOX] > 0 ? P_BOX : typeAtSlot(0);
         }
         mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0; starGot = false; resStars = 0; finalT = 0;
-        camx = gx(); camy = (L->flags & 1) ? gy() + 60.f : gy() - 10.f;     // sandbox: la rejilla sube en pantalla para no taparla con la bandeja
-        fansOn = true;
+        camx = gx(); camy = gy() - 10.f;
+        fansOn = false;                       // los ventiladores arrancan apagados: se encienden con su boton
         for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { popped[r][c] = false; thrFx[r][c] = nullptr; }
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
@@ -84,11 +87,13 @@ public:
         }
         return 0;
     }
-    int trayN() const { return (L->flags & 1) ? P_COUNT : 3; }
+    int trayN() const { int n = 0; for (int k = 0; k < P_COUNT; k++) if (L->pieces[k] > 0) n++; return n; }   // solo las piezas que ofrece el nivel
+    int typeAtSlot(int slot) const { int n = 0; for (int k = 0; k < P_COUNT; k++) if (L->pieces[k] > 0) { if (n == slot) return k; n++; } return -1; }
+    int slotOfType(int type) const { int n = 0; for (int k = 0; k < P_COUNT; k++) if (L->pieces[k] > 0) { if (k == type) return n; n++; } return 0; }
     int trayAt(float sx, float sy) const {
         int n = trayN();
         for (int i = 0; i < n; i++)
-            if (fabsf(sx - trayX(i, n)) <= TRAY_R && fabsf(sy - TRAY_Y) <= TRAY_R) return i;
+            if (fabsf(sx - trayX(i, n)) <= TRAY_R && fabsf(sy - TRAY_Y) <= TRAY_R) return typeAtSlot(i);
         return -1;
     }
 
@@ -201,8 +206,6 @@ public:
         }
         if (in.pressCircle) { reset(false); return; }
         if (mode != M_PLAY) return;
-        if (in.pressSquare) { fansOn = !fansOn; events |= EV_CLICK; }          // cuadrado: ventilador encendido / apagado
-        if (in.pressX) popBalloon();                                            // X: pincha un globo
         // ventilador: empuja hacia adelante; globo: levanta
         int nthr = 0;
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
@@ -212,7 +215,7 @@ public:
             nthr++;
             if (tp == P_FAN && !fansOn) continue;
             if (tp == P_FAN) { float a = chassis->GetAngle(); chassis->ApplyForceToCenter((4.0f * totalMass) * b2Vec2(cosf(a), sinf(a)), true); }   // ~4 m/s2 por ventilador
-            else chassis->ApplyForceToCenter(b2Vec2(0.f, -0.35f * 10.f * totalMass), true);                                                    // cada globo levanta el 35% del peso
+            else chassis->ApplyForceToCenter(b2Vec2(0.f, -L->balloonLift * 10.f * totalMass), true);                                          // cada globo levanta una parte del peso (segun el nivel)
         }
         chassis->SetLinearDamping(nthr > 0 ? 0.25f : 0.f);
         world->Step(dt, 8, 3);
@@ -232,7 +235,7 @@ public:
             for (int i = 0; i < nwheels && !hit; i++) hit = (wheels[i]->GetPosition() - b2Vec2(sx, sy)).Length() < rr;
             if (hit) { starGot = true; events |= EV_STAR; }
         }
-        if (px >= L->goalX) {
+        if (px >= L->goalX && py >= L->goalY0 && py <= L->goalY1) {
             mode = M_WIN; events |= EV_WIN; finalT = t;
             resStars = 1 + (starGot ? 1 : 0) + ((L->parTime > 0.f && t <= L->parTime) ? 1 : 0);
             return;
@@ -288,7 +291,12 @@ Game::~Game() { delete g; }
 void Game::reset() { g->reset(true); }
 bool Game::loadLevel(int i) { if (i < 0 || i >= NUM_LEVELS_DATA) return false; g->levelIdx = i; g->L = &LEVELS[i]; g->reset(true); return true; }
 int Game::levelIndex() const { return g->levelIdx; }
-int Game::levelCount() { return NUM_STORY_LEVELS; }
+int Game::levelCount(int world) { int n = 0; for (int i = 0; i < NUM_LEVELS_DATA; i++) if (LEVELS[i].world == world && !(LEVELS[i].flags & 1)) n++; return n; }
+int Game::levelAt(int world, int slot) { int n = 0; for (int i = 0; i < NUM_LEVELS_DATA; i++) if (LEVELS[i].world == world && !(LEVELS[i].flags & 1)) { if (n == slot) return i; n++; } return -1; }
+int Game::slotOf(int levelIndex) { int n = 0; for (int i = 0; i < levelIndex; i++) if (LEVELS[i].world == LEVELS[levelIndex].world && !(LEVELS[i].flags & 1)) n++; return n; }
+int Game::worldNow() const { return g->L->world; }
+void Game::toggleFans() { if (g->mode == M_PLAY) { g->fansOn = !g->fansOn; g->events |= EV_CLICK; } }
+void Game::popOneBalloon() { if (g->mode == M_PLAY) g->popBalloon(); }
 int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }
 float Game::zoomNow() const { return g->zoom(); }
 int Game::gridCols() const { return g->cols(); }
@@ -309,7 +317,8 @@ int Game::remaining(int t) const { return g->left[t]; }
 bool Game::cellPiece(int col, int row, int& type) const { type = g->cells[row][col]; return type >= 0; }
 bool Game::cellHasPig(int col, int row) const { return g->pig[row][col]; }
 void Game::cellScreen(int col, int row, float& sx, float& sy) const { g->toScreen(g->cellX(col), g->cellY(row), sx, sy); }
-void Game::traySlot(int i, float& sx, float& sy) const { sx = trayX(i, g->trayN()); sy = TRAY_Y; }
+void Game::traySlot(int type, float& sx, float& sy) const { sx = trayX(g->slotOfType(type), g->trayN()); sy = TRAY_Y; }
+int Game::trayTypeAt(int slot) const { return g->typeAtSlot(slot); }
 int Game::trayCount() const { return g->trayN(); }
 bool Game::starBox(float& x, float& y) const { if (g->L->starX < -1e8f || g->starGot) return false; x = g->L->starX; y = g->L->starY; return true; }
 bool Game::starCollected() const { return g->starGot; }

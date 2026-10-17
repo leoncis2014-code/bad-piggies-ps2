@@ -27,7 +27,12 @@ public:
     void reset();                              // vuelve al modo construccion
     bool loadLevel(int index);                 // false si ese nivel todavia no existe
     int  levelIndex() const;
-    static int levelCount();                   // niveles de historia disponibles (sin el sandbox)
+    static int levelCount(int world);          // niveles disponibles de un mundo (0 = Ground Hog Day, 1 = When Pigs Fly)
+    static int levelAt(int world, int slot);   // indice del nivel en la casilla 'slot' de ese mundo (-1 si no existe)
+    static int slotOf(int levelIndex);         // posicion del nivel dentro de su mundo
+    int  worldNow() const;
+    void toggleFans();                         // boton de ventilador del juego
+    void popOneBalloon();                      // boton de globo del juego
     static int sandboxIndex();                 // indice del nivel sandbox
     bool isSandbox() const;
     int  gridCols() const;
@@ -48,7 +53,8 @@ public:
     bool cellHasPig(int col, int row) const;
     bool cellPiece(int col, int row, int& type) const;   // fila 0 arriba, fila 1 abajo
     void cellScreen(int col, int row, float& sx, float& sy) const;
-    void traySlot(int i, float& sx, float& sy) const;     // centro del icono de bandeja en pantalla
+    void traySlot(int type, float& sx, float& sy) const;  // centro del icono de bandeja (por tipo de pieza)
+    int  trayTypeAt(int slot) const;                      // tipo de pieza de cada casilla de la bandeja
     float time() const;
     int  trayCount() const;                    // piezas visibles en la bandeja (3, o 5 en el sandbox)
     bool starBox(float& x, float& y) const;    // caja estrella visible (aun no recogida)

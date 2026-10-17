@@ -24,6 +24,7 @@ extern unsigned int size_audsrv_irx;
 extern "C" {
 extern unsigned char decor_raw[]; extern unsigned int size_decor_raw;
 extern unsigned char terrain1_raw[]; extern unsigned int size_terrain1_raw;
+extern unsigned char terrain2_raw[]; extern unsigned int size_terrain2_raw;
 extern unsigned char icon_sys[]; extern unsigned int size_icon_sys;
 extern unsigned char icon_ico[]; extern unsigned int size_icon_ico;
 extern unsigned char screen_title[]; extern unsigned int size_screen_title;
@@ -53,6 +54,7 @@ static const float OPT_ROWY[4] = { 138, 188, 238, 300 };                     // 
 struct SaveData { char magic[4]; int version; unsigned char stars[16]; unsigned char opt[4]; float best[16]; };
 static SaveData sv;
 static bool mcOK = false;
+static bool saveExists = false;       // ya hay una partida escrita en la memory card
 static bool g_newRecord = false;      // el ultimo nivel ganado batio el mejor tiempo
 static float g_bestShown = 0.f;
 enum { FIO_RD = 0x0001, FIO_WR = 0x0002, FIO_CREAT = 0x0200, FIO_TRUNC = 0x0400 };
@@ -76,6 +78,7 @@ static bool saveLoad() {
     mcClose(fd); mcResult();
     if (n != (int)sizeof(tmp) || tmp.magic[0] != 'B' || tmp.magic[1] != 'P' || tmp.magic[2] != 'G' || tmp.magic[3] != '1') return false;
     sv = tmp;
+    saveExists = true;
     return true;
 }
 static bool writeFile(const char* path, const void* data, int size) {
@@ -92,25 +95,22 @@ static void saveIconIfMissing() {           // el icono (un cerdito) que muestra
     if (fd >= 0) { mcClose(fd); mcResult(); return; }
     if (writeFile("BPIGGIES/icon.sys", icon_sys, (int)size_icon_sys)) writeFile("BPIGGIES/bpiggies.ico", icon_ico, (int)size_icon_ico);
 }
-static void saveWrite() {
-    if (!mcOK) return;
+static bool saveWrite() {
+    if (!mcOK) return false;
     mcMkDir(0, 0, "BPIGGIES"); mcResult();                       // si ya existe da error y no importa
     saveIconIfMissing();
-    mcOpen(0, 0, "BPIGGIES/progreso.dat", FIO_WR | FIO_CREAT | FIO_TRUNC);
-    int fd = mcResult();
-    if (fd < 0) return;
-    mcWrite(fd, &sv, sizeof(sv)); mcResult();
-    mcClose(fd); mcResult();
+    bool ok = writeFile("BPIGGIES/progreso.dat", &sv, (int)sizeof(sv));
+    if (ok) saveExists = true;
+    return ok;
 }
-static void saveOptions() { sv.opt[0] = optCursor; sv.opt[1] = optMusic; sv.opt[2] = optSfx; saveWrite(); }
+static void saveOptions() { sv.opt[0] = optCursor; sv.opt[1] = optMusic; sv.opt[2] = optSfx; }   // solo en memoria: se escribe con el boton del disquete
 static void recordWin(const Game& g) {      // estrellas y mejor tiempo del nivel que se acaba de ganar
     int li = g.levelIndex(); if (li < 0 || li >= 16 || g.isSandbox()) return;
     int st = g.resultStars(); float ft = g.finalTime();
     if (st > sv.stars[li]) sv.stars[li] = (unsigned char)st;
     g_newRecord = (sv.best[li] <= 0.f || ft < sv.best[li]);
     if (g_newRecord) sv.best[li] = ft;
-    g_bestShown = sv.best[li];
-    saveWrite();
+    g_bestShown = sv.best[li];                // se guarda en memoria; a la tarjeta solo con el boton del disquete
 }
 
 
@@ -119,10 +119,10 @@ static void recordWin(const Game& g) {      // estrellas y mejor tiempo del nive
 static GSGLOBAL* gs;
 static GSTEXTURE texPig, texBox, texWheel, texFlag, texFontS, texScreen;
 static const float FONT_K = 24.f / 22.f;   // el atlas es de 22 px; esto mantiene el tamano de antes
-static int screenLoaded = -1;
+static int slotOwner = -1;   // que hay en la textura compartida de 512 KB: 0..2 = pantallas, 10+n = terreno del nivel n
 static GSTEXTURE texDecor[DEC_COUNT];
-static GSTEXTURE texTerrain[1];                       // una por nivel con arte (por ahora solo el nivel 1)
-static const unsigned char* const TERRAIN_RAW[1] = { terrain1_raw };
+static GSTEXTURE texTerr;                             // terreno del nivel actual (comparte la memoria de video con las imagenes de los menus)
+static const unsigned char* const TERRAIN_RAW[3] = { terrain1_raw, terrain2_raw, NULL };   // por indice de nivel (el sandbox no usa textura)
 static char padBuf[256] __attribute__((aligned(64)));
 static float kx = 1.f, ky = 1.f;   // pantalla virtual 640x448 -> pantalla real
 
@@ -317,6 +317,8 @@ static void ring(float cx, float cy, float r, float th, u64 col) {
 // que elemento de un menu hay bajo el cursor (-1 = ninguno)
 static int hitTest(Screen sc, float x, float y) {
     if (sc == S_TITLE) {
+        float fx = x - 40.f, fy = y - 330.f;
+        if (fx * fx + fy * fy < 30.f * 30.f) return 2;
         float dx = x - 335.f, dy = y - 234.f;
         if (dx * dx + dy * dy < 56.f * 56.f) return 0;
         if (x >= 400 && x <= 560 && y >= 271 && y <= 311) return 1;
@@ -330,20 +332,80 @@ static int hitTest(Screen sc, float x, float y) {
     return -1;
 }
 
+static float g_clock = 0.f;
+static float gcx = 320.f, gcy = 300.f;      // cursor durante la partida
+static void disc(float cx, float cy, float r, u64 col) {
+    const int N = 24;
+    for (int i = 0; i < N; i++) {
+        float a0 = i * 6.2831853f / N, a1 = (i + 1) * 6.2831853f / N;
+        tri(cx, cy, cx + cosf(a0) * r, cy + sinf(a0) * r, cx + cosf(a1) * r, cy + sinf(a1) * r, col);
+    }
+}
+static void drawFloppy(float cx, float cy, bool hot) {      // icono de disquete
+    rect(cx - 22, cy - 22, cx + 22, cy + 22, rgba(0x20, 0x38, 0x80, 0x80));
+    rect(cx - 22, cy - 22, cx + 22, cy - 20, hot ? rgba(0xFF, 0xE0, 0x20, 0x80) : rgba(0x50, 0x70, 0xC0, 0x80));
+    rect(cx - 13, cy - 22, cx + 12, cy - 7, rgba(0xC8, 0xCC, 0xD4, 0x80));       // persiana metalica
+    rect(cx + 3, cy - 20, cx + 8, cy - 9, rgba(0x30, 0x34, 0x40, 0x80));
+    rect(cx - 15, cy + 1, cx + 15, cy + 22, rgba(0xF2, 0xF2, 0xF2, 0x80));       // etiqueta
+    rect(cx - 11, cy + 7, cx + 11, cy + 9, rgba(0xB0, 0xB0, 0xB8, 0x80));
+    rect(cx - 11, cy + 13, cx + 11, cy + 15, rgba(0xB0, 0xB0, 0xB8, 0x80));
+    if (hot) frameRect(cx - 27, cy - 27, cx + 27, cy + 27, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+}
+// botones azules de la partida (como en el juego original): uno por tipo de pieza activable
+static int playButtons(const Game& g, float xs[2], int ty[2]) {    // ty: 0 = ventilador, 1 = globo
+    int n = 0;
+    if (g.fanCount() > 0) ty[n++] = 0;
+    if (g.balloonsLeft() > 0) ty[n++] = 1;
+    for (int i = 0; i < n; i++) xs[i] = 320.f + ((float)i - (float)(n - 1) * 0.5f) * 80.f;
+    return n;
+}
+static const float PLAY_BTN_Y = 366.f;
+static int playButtonAt(const Game& g, float x, float y) {
+    float xs[2]; int ty[2]; int n = playButtons(g, xs, ty);
+    for (int i = 0; i < n; i++) { float dx = x - xs[i], dy = y - PLAY_BTN_Y; if (dx * dx + dy * dy < 32.f * 32.f) return ty[i]; }
+    return -1;
+}
+static void drawPlayButtons(const Game& g) {
+    float xs[2]; int ty[2]; int n = playButtons(g, xs, ty);
+    int over = playButtonAt(g, gcx, gcy);
+    for (int i = 0; i < n; i++) {
+        float cx = xs[i], cy = PLAY_BTN_Y;
+        bool on = (ty[i] == 0) && g.fansOn();
+        disc(cx, cy, 28.f, rgba(0x2F, 0x84, 0xDE, 0x80));
+        ring(cx, cy, 28.f, 4.f, on ? rgba(0x60, 0xE8, 0x60, 0x80) : rgba(0xB8, 0xE0, 0xFF, 0x80));
+        if (ty[i] == 0) sprite(texDecor[DEC_FAN], cx, cy, texDecor[DEC_FAN].Width * 0.62f, texDecor[DEC_FAN].Height * 0.62f, 0.f);
+        else sprite(texDecor[DEC_BALLOON], cx, cy - 1, texDecor[DEC_BALLOON].Width * 0.72f, texDecor[DEC_BALLOON].Height * 0.72f, 0.f);
+        if (ty[i] == 1 && g.balloonsLeft() > 1) { char b[8]; snprintf(b, sizeof(b), "x%d", g.balloonsLeft()); textLeft(cx + 14, cy + 12, b, 0.6f, 255, 255, 255); }
+        if (over == ty[i]) ring(cx, cy, 34.f, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+    }
+}
+
 // ---------------------------------------------------------------- pantallas originales
 static void screenInit() {
     memset(&texScreen, 0, sizeof(texScreen));
     texScreen.Width = SCR_W; texScreen.Height = SCR_H; texScreen.PSM = GS_PSM_CT16; texScreen.Filter = GS_FILTER_LINEAR;
     texScreen.Mem = (u32*)memalign(128, SCR_W * SCR_H * 2);
     texScreen.Vram = gsKit_vram_alloc(gs, gsKit_texture_size(SCR_W, SCR_H, GS_PSM_CT16), GSKIT_ALLOC_USERBUFFER);
+    texTerr = texScreen;                                          // el terreno usa el mismo espacio de video (en el juego no se ven los menus)
+    texTerr.PSM = GS_PSM_CT32;
+    texTerr.Mem = (u32*)memalign(128, 512000);
+}
+static void terrainLoad(const Game& g) {
+    const LevelData& L = g.levelData(); int idx = g.levelIndex();
+    if (L.texW <= 0 || !TERRAIN_RAW[idx] || slotOwner == 10 + idx) return;
+    texTerr.Width = L.texW; texTerr.Height = L.texH; texTerr.PSM = GS_PSM_CT32; texTerr.Filter = GS_FILTER_LINEAR;
+    memcpy(texTerr.Mem, TERRAIN_RAW[idx], (size_t)L.texW * L.texH * 4);
+    FlushCache(0);
+    gsKit_texture_upload(gs, &texTerr);
+    slotOwner = 10 + idx;
 }
 static void screenLoad(int idx) {            // sube la imagen pedida a la memoria de video (se hace al cambiar de pantalla)
-    if (idx == screenLoaded) return;
+    if (idx == slotOwner) return;
     const unsigned char* src = idx == SCR_TITLE ? screen_title : (idx == SCR_WORLDS ? screen_worlds : screen_levels);
     memcpy(texScreen.Mem, src, SCR_W * SCR_H * 2);
     FlushCache(0);
     gsKit_texture_upload(gs, &texScreen);
-    screenLoaded = idx;
+    slotOwner = idx;
 }
 static void screenDraw(int idx) {            // la imagen es 640x400: va centrada, con franjas del color del borde arriba y abajo
     const int* c = SCR_BARS[idx];
@@ -378,7 +440,7 @@ static void drawDecor(const Game& g, int layer) {
 static void drawTerrain(const Game& g) {
     const LevelData& L = g.levelData();
     bool textured = L.texW > 0;
-    GSTEXTURE* tt = textured ? &texTerrain[g.levelIndex()] : NULL;
+    GSTEXTURE* tt = textured ? &texTerr : NULL;
     u64 white = rgba(0x80, 0x80, 0x80, 0x80), flat = rgba(0x3A, 0x66, 0x66, 0x80);
     static float X[1024], Y[1024], U[1024], V[1024];
     int n = L.npts < 1024 ? L.npts : 1024;
@@ -429,20 +491,22 @@ static void drawGameUI(const Game& g) {
     char buf[64];
     if (g.mode() == M_BUILD) {
         u64 cellc = rgba(0xFF, 0xFF, 0xFF, 0x24), cellb = rgba(0xFF, 0xFF, 0xFF, 0x60);
-        if (g.gridCols() > 3) {   // rejilla grande (sandbox 16x16): un fondo y lineas finas, en vez de 256 recuadros
+        if (g.gridCols() * g.gridRows() > 60) {   // rejilla muy grande: un fondo y lineas finas, en vez de un recuadro por casilla
             float ax, ay, bx, by, half = 31.f * g.zoomNow() * 0.5f;
             g.cellScreen(0, 0, ax, ay); g.cellScreen(g.gridCols() - 1, g.gridRows() - 1, bx, by);
             rect(ax - half, ay - half, bx + half, by + half, cellc);
             for (int c = 0; c <= g.gridCols(); c++) { float x = ax - half + c * 2.f * half; rect(x - 0.6f, ay - half, x + 0.6f, by + half, cellb); }
             for (int r = 0; r <= g.gridRows(); r++) { float y = ay - half + r * 2.f * half; rect(ax - half, y - 0.6f, bx + half, y + 0.6f, cellb); }
         } else {
-            for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) {
+            float half = 31.f * g.zoomNow() * 0.5f;
+            for (int r = 0; r < g.gridRows(); r++) for (int c = 0; c < g.gridCols(); c++) {
                 float sx, sy; g.cellScreen(c, r, sx, sy);
-                rect(sx - 31, sy - 31, sx + 31, sy + 31, cellc);
-                frameRect(sx - 31, sy - 31, sx + 31, sy + 31, 1.5f, cellb);
+                rect(sx - half, sy - half, sx + half, sy + half, cellc);
+                frameRect(sx - half, sy - half, sx + half, sy + half, 1.5f, cellb);
             }
         }
-        for (int i = 0; i < g.trayCount(); i++) {   // bandeja: cerdito, caja, rueda; puntos = las que quedan
+        for (int slot = 0; slot < g.trayCount(); slot++) {   // bandeja: solo las piezas que ofrece el nivel; puntos = las que quedan
+            int i = g.trayTypeAt(slot);
             float sx, sy; g.traySlot(i, sx, sy);
             rect(sx - 30, sy - 30, sx + 30, sy + 30, rgba(0x10, 0x20, 0x30, 0x50));
             spriteOf(i, sx, sy - 4, 0.8f, 0.f);
@@ -455,13 +519,15 @@ static void drawGameUI(const Game& g) {
         tri(cx, cy, cx + 14, cy + 6, cx + 6, cy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
         tri(cx + 1, cy + 1, cx + 11, cy + 6, cx + 6, cy + 11, rgba(0x20, 0x20, 0x20, 0x80));
     } else if (g.mode() == M_PLAY) {
+        if (g.fanCount() > 0 || g.balloonsLeft() > 0) drawPlayButtons(g);
+        if (g.fanCount() > 0 || g.balloonsLeft() > 0) textCentered(false, 320, 408, "Cursor + X sobre los botones azules   Círculo: construir", 0.62f, 255, 255, 255);
+        else if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir   Stick derecho: cámara", 0.62f, 255, 255, 255);
         if (g.isSandbox()) {
-            textCentered(false, 320, 408, "Cuadrado: ventilador   X: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
             char b2[48];
             if (g.fanCount() > 0) textLeft(30, 48, g.fansOn() ? "Ventilador: ENCENDIDO" : "Ventilador: APAGADO", 0.75f, g.fansOn() ? 150 : 255, g.fansOn() ? 255 : 150, 150);
             if (g.balloonsLeft() > 0) { snprintf(b2, sizeof(b2), "Globos: %d", g.balloonsLeft()); textLeft(30, 72, b2, 0.75f, 255, 200, 200); }
         }
-        else if (g.time() < 5.f) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
+        else if (g.time() < 5.f && g.fanCount() == 0 && g.balloonsLeft() == 0) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
     } else if (g.mode() == M_WIN) {
         rect(100, 60, 540, 396, rgba(0x10, 0x20, 0x30, 0x60));
         frameRect(100, 60, 540, 396, 3.f, rgba(0x40, 0xD0, 0x40, 0x80));
@@ -533,17 +599,12 @@ int main(int, char**) {
     uploadTex(texFlag, SPR_FLAG_PIX, SPR_FLAG_W, SPR_FLAG_H);
     for (int i = 0; i < DEC_COUNT; i++) uploadTex(texDecor[i], (const uint32_t*)(decor_raw + DECOR_TEX[i].offset), DECOR_TEX[i].w, DECOR_TEX[i].h);
     Game game;
-    for (int i = 0; i < Game::levelCount() && i < 1; i++) {
-        game.loadLevel(i);
-        const LevelData& LD = game.levelData();
-        uploadTex(texTerrain[i], (const uint32_t*)TERRAIN_RAW[i], LD.texW, LD.texH);
-    }
-    game.loadLevel(0);
     uploadFont(texFontS, FONT_SMALL);
     screenInit();
 
     Screen screen = S_TITLE;
     int sel = 0;                 // nivel elegido en el selector (0..14)
+    int selWorld = 0;            // mundo cuyo selector de niveles se muestra
     int wsel = 0;                // mundo elegido (0..3)
     int titleSel = 0;            // 0 = jugar, 1 = opciones
     int optSel = 0;              // fila elegida en opciones
@@ -553,6 +614,8 @@ int main(int, char**) {
     Screen prevScreen = S_TITLE;
     float clock = 0.f;
     Pad pad;
+    bool wasPlaying = false;
+    bool confirmOpen = false; int confirmSel = 1; float saveMsgTimer = 0.f; const char* saveMsgText = "";
     for (;;) {
         // ---------------- entrada ----------------
         Pad np; np.btn = pad.btn;
@@ -577,7 +640,8 @@ int main(int, char**) {
             }
         }
         pad = np;
-        clock += dt;
+        clock += dt; g_clock = clock;
+        if (saveMsgTimer > 0) saveMsgTimer -= dt;
         if (msgTimer > 0) msgTimer -= dt;
         bool pX = pad.edge & PAD_CROSS, pO = pad.edge & PAD_CIRCLE, pT = pad.edge & PAD_TRIANGLE, pS = pad.edge & PAD_SQUARE, pStart = pad.edge & PAD_START;
 
@@ -592,16 +656,48 @@ int main(int, char**) {
             if (mcy > SCREEN_H) { mcy = SCREEN_H; }
             hover = hitTest(screen, mcx, mcy);
             if (hover >= 0) {
-                if (screen == S_TITLE) titleSel = hover; else if (screen == S_WORLDS) wsel = hover;
+                if (screen == S_TITLE) { if (!confirmOpen) titleSel = hover; } else if (screen == S_WORLDS) wsel = hover;
                 else if (screen == S_SELECT) sel = hover; else if (screen == S_OPTIONS) optSel = hover;
             }
         }
         bool nav = !useCur;                                 // sin cursor: se navega con las direcciones
         bool act = pX && (!useCur || hover >= 0);           // con cursor: X actua sobre lo que esta debajo
         if (screen == S_TITLE) {
-            if (nav) { if (pad.eR || pad.eD) titleSel = 1; if (pad.eL || pad.eU) titleSel = 0; }
-            if (pStart) { sndPlay(SND_CLICK); screen = S_WORLDS; }
-            else if (act) { sndPlay(SND_CLICK); if (titleSel == 0) screen = S_WORLDS; else { screen = S_OPTIONS; optSel = 0; } }
+            if (confirmOpen) {                                              // ventana "¿seguro?" del guardado
+                int cs = confirmSel; bool hv = false;
+                if (useCur) {
+                    if (mcx >= 200 && mcx <= 300 && mcy >= 262 && mcy <= 302) { confirmSel = 0; hv = true; }
+                    else if (mcx >= 340 && mcx <= 440 && mcy >= 262 && mcy <= 302) { confirmSel = 1; hv = true; }
+                }
+                if (nav) { if (pad.eL) confirmSel = 0; if (pad.eR) confirmSel = 1; }
+                if (confirmSel != cs) sndPlay(SND_CLICK);
+                if (pO) { confirmOpen = false; sndPlay(SND_CLICK); }
+                else if (pX && (!useCur || hv)) {
+                    confirmOpen = false;
+                    if (confirmSel == 0) {
+                        saveOptions();
+                        if (!mcOK) saveMsgText = "No se encontró la memory card";
+                        else if (saveWrite()) saveMsgText = "¡Partida guardada!";
+                        else saveMsgText = "No se pudo guardar";
+                        saveMsgTimer = 3.0f;
+                    }
+                    sndPlay(SND_CLICK);
+                }
+            } else {
+                static const int ORD[3] = { 2, 0, 1 };                      // de izquierda a derecha: disquete, jugar, opciones
+                if (nav) {
+                    int p = 1; for (int k = 0; k < 3; k++) if (ORD[k] == titleSel) p = k;
+                    if (pad.eR && p < 2) titleSel = ORD[p + 1];
+                    if (pad.eL && p > 0) titleSel = ORD[p - 1];
+                }
+                if (pStart) { sndPlay(SND_CLICK); screen = S_WORLDS; }
+                else if (act) {
+                    sndPlay(SND_CLICK);
+                    if (titleSel == 0) screen = S_WORLDS;
+                    else if (titleSel == 1) { screen = S_OPTIONS; optSel = 0; }
+                    else { confirmOpen = true; confirmSel = 1; }
+                }
+            }
         } else if (screen == S_OPTIONS) {
             if (nav) {
                 if (pad.eU && optSel > 0) { optSel--; sndPlay(SND_CLICK); }
@@ -622,7 +718,7 @@ int main(int, char**) {
             }
             if (pO) { sndPlay(SND_CLICK); screen = S_TITLE; }
             else if (act) {
-                if (wsel == 0) { sndPlay(SND_CLICK); screen = S_SELECT; }
+                if (wsel == 0 || wsel == 1) { selWorld = wsel; sel = 0; sndPlay(SND_CLICK); screen = S_SELECT; }
                 else if (wsel == 3) { if (game.loadLevel(Game::sandboxIndex())) { sndPlay(SND_CLICK); screen = S_GAME; } }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
             }
@@ -638,23 +734,34 @@ int main(int, char**) {
             }
             if (pO) { sndPlay(SND_CLICK); screen = S_WORLDS; }
             else if (act) {
-                if (game.loadLevel(sel)) { sndPlay(SND_CLICK); screen = S_GAME; }
+                int li = Game::levelAt(selWorld, sel);
+                if (li >= 0 && game.loadLevel(li)) { sndPlay(SND_CLICK); screen = S_GAME; }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
             }
         } else {   // S_GAME
             bool handled = false;
-            if (pStart || (pT && (game.mode() == M_WIN || game.mode() == M_LOSE))) { if (game.isSandbox()) screen = S_WORLDS; else { sel = game.levelIndex(); screen = S_SELECT; } handled = true; }
+            if (pStart || (pT && (game.mode() == M_WIN || game.mode() == M_LOSE))) { if (game.isSandbox()) screen = S_WORLDS; else { selWorld = game.worldNow(); sel = Game::slotOf(game.levelIndex()); screen = S_SELECT; } handled = true; }
             else if (game.mode() == M_WIN && pX) {
-                int next = game.levelIndex() + 1;
-                if (game.loadLevel(next)) { sndPlay(SND_CLICK); }
-                else { sel = next < 15 ? next : 14; screen = S_SELECT; msgTimer = 3.0f; keepMsg = true; }
+                int w = game.worldNow(), slot = Game::slotOf(game.levelIndex()) + 1, next = Game::levelAt(w, slot);
+                if (next >= 0 && game.loadLevel(next)) { sndPlay(SND_CLICK); }
+                else { selWorld = w; sel = slot < 15 ? slot : 14; screen = S_SELECT; msgTimer = 3.0f; keepMsg = true; }
                 handled = true;
+            }
+            if (!handled && game.mode() == M_PLAY) {                      // cursor de la partida: se mueve con el stick izquierdo
+                gcx += pad.ax * 320.f * dt; gcy += pad.ay * 320.f * dt;
+                if (gcx < 0) { gcx = 0; }
+                if (gcx > SCREEN_W) { gcx = SCREEN_W; }
+                if (gcy < 0) { gcy = 0; }
+                if (gcy > SCREEN_H) { gcy = SCREEN_H; }
+                if (pX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); }
             }
             if (!handled) {
                 GameInput in;
                 in.stickX = pad.ax; in.stickY = pad.ay; in.lookX = pad.lx; in.lookY = pad.ly;
                 in.pressX = pX; in.pressSquare = pS; in.pressTriangle = pT; in.pressCircle = pO;
                 game.update(dt, in);
+                if (game.mode() == M_PLAY && !wasPlaying) { gcx = 320.f; gcy = 300.f; }
+                wasPlaying = (game.mode() == M_PLAY);
                 unsigned ev = game.takeEvents();
                 if (ev & EV_WIN) { sndPlay(SND_WIN); recordWin(game); }
                 else if (ev & EV_STAR) sndPlay(SND_STAR);
@@ -671,6 +778,7 @@ int main(int, char**) {
         sndPump();
 
         // ---------------- dibujo ----------------
+        if (screen == S_GAME) terrainLoad(game);
         if (screen == S_TITLE || screen == S_OPTIONS) screenLoad(SCR_TITLE);
         else if (screen == S_WORLDS) screenLoad(SCR_WORLDS);
         else if (screen == S_SELECT) screenLoad(SCR_LEVELS);
@@ -680,21 +788,31 @@ int main(int, char**) {
             rect(400, 271, 560, 311, rgba(0x6C, 0xBF, 0x3A, 0x80));          // boton "Opciones" (el original no lo tiene)
             frameRect(400, 271, 560, 311, 3.f, rgba(0x3A, 0x7A, 0x22, 0x80));
             textCentered(false, 480, 275, "Opciones", 1.0f, 255, 255, 255);
-            {
+            drawFloppy(40, 330, titleSel == 2 && !confirmOpen);                // boton de guardar (disquete)
+            if (!confirmOpen) {
                 float pulse = 2.f + 2.f * sinf(clock * 6.f);
                 if (titleSel == 0) ring(335, 234, 58.f + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
-                else frameRect(400 - pulse, 271 - pulse, 560 + pulse, 311 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                else if (titleSel == 1) frameRect(400 - pulse, 271 - pulse, 560 + pulse, 311 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 330, titleSel == 0 ? "Pulsá X para jugar" : (titleSel == 1 ? "Pulsá X para abrir las opciones" : "Pulsá X: guardar"), 1.2f, 255, 255, 255);
+            } else {
+                rect(0, 24, SCREEN_W, 424, rgba(0x00, 0x00, 0x00, 0x50));
+                rect(90, 140, 550, 320, rgba(0x10, 0x20, 0x30, 0x78));
+                frameRect(90, 140, 550, 320, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                if (saveExists) { textCentered(false, 320, 158, "¿Seguro que querés sobrescribir", 1.05f, 255, 255, 255); textCentered(false, 320, 194, "los datos ya guardados?", 1.05f, 255, 255, 255); }
+                else { textCentered(false, 320, 158, "¿Querés guardar la partida", 1.05f, 255, 255, 255); textCentered(false, 320, 194, "en la memory card?", 1.05f, 255, 255, 255); }
+                rect(200, 262, 300, 302, confirmSel == 0 ? rgba(0x40, 0xB0, 0x40, 0x80) : rgba(0x30, 0x50, 0x30, 0x80));
+                rect(340, 262, 440, 302, confirmSel == 1 ? rgba(0xC0, 0x50, 0x50, 0x80) : rgba(0x50, 0x30, 0x30, 0x80));
+                frameRect(confirmSel == 0 ? 200 : 340, 262, confirmSel == 0 ? 300 : 440, 302, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                textCentered(false, 250, 268, "Sí", 1.1f, 255, 255, 255); textCentered(false, 390, 268, "No", 1.1f, 255, 255, 255);
             }
-            if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 330, titleSel == 0 ? "Pulsá X para jugar" : "Pulsá X para abrir las opciones", 1.2f, 255, 255, 255);
+            if (saveMsgTimer > 0) {
+                rect(70, 90, 570, 150, rgba(0x10, 0x20, 0x30, 0x78));
+                frameRect(70, 90, 570, 150, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                textCentered(false, 320, 102, saveMsgText, 1.1f, 255, 240, 120);
+            }
         } else if (screen == S_WORLDS) {
             screenDraw(SCR_WORLDS);                                          // selector de mundos original
-            for (int i = 1; i < 3; i++) rect(MENU_PX[i], 24 + 40, MENU_PX[i] + 102, 24 + 328, rgba(0x10, 0x20, 0x30, 0x48));   // velo: bloqueados
-            {   // candado sobre "When Pigs Fly" (el original lo muestra abierto)
-                float cx = MENU_PX[1] + 51, cy = 24 + 190;
-                frameRect(cx - 14, cy - 34, cx + 14, cy - 4, 5.f, rgba(0xC0, 0xC4, 0xC8, 0x80));
-                rect(cx - 24, cy - 8, cx + 24, cy + 30, rgba(0xF0, 0xC8, 0x20, 0x80));
-                rect(cx - 4, cy + 6, cx + 4, cy + 20, rgba(0x60, 0x48, 0x10, 0x80));
-            }
+            rect(MENU_PX[2], 24 + 40, MENU_PX[2] + 102, 24 + 328, rgba(0x10, 0x20, 0x30, 0x48));   // velo: solo el mundo que sigue bloqueado
             {
                 float pulse = 2.f + 2.f * sinf(clock * 6.f);
                 frameRect(MENU_PX[wsel] - pulse, 24 + 40 - pulse, MENU_PX[wsel] + 102 + pulse, 24 + 328 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
@@ -717,8 +835,8 @@ int main(int, char**) {
             screenDraw(SCR_LEVELS);                                          // selector de niveles original
             for (int i = 0; i < 15; i++) {
                 float cx = MENU_TX[i % 5], cy = 24 + MENU_TY[i / 5];
-                if (i >= Game::levelCount()) rect(cx - 35, cy - 35, cx + 35, cy + 52, rgba(0x10, 0x20, 0x30, 0x50));   // velo: no existe todavia
-                else for (int k = 0; k < (int)sv.stars[i] && k < 3; k++) sprite(texDecor[DEC_GOLDSTAR], cx + (k - 1) * 17.f, cy + 47, 17, 16, 0);   // estrellas ganadas
+                if (i >= Game::levelCount(selWorld)) rect(cx - 35, cy - 35, cx + 35, cy + 52, rgba(0x10, 0x20, 0x30, 0x50));   // velo: no existe todavia
+                else { int li = Game::levelAt(selWorld, i); for (int k = 0; li >= 0 && k < (int)sv.stars[li] && k < 3; k++) sprite(texDecor[DEC_GOLDSTAR], cx + (k - 1) * 17.f, cy + 47, 17, 16, 0); }   // estrellas ganadas
                 if (i == sel) {
                     float pulse = 2.f + 2.f * sinf(clock * 6.f);
                     frameRect(cx - 38 - pulse, cy - 38 - pulse, cx + 38 + pulse, cy + 38 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
@@ -747,7 +865,7 @@ int main(int, char**) {
                 textLeft(135, y, LABEL[r], 1.05f, 255, 255, 255);
                 if (r < 3) textLeft(462, y, val[r] ? "Sí" : "No", 1.1f, val[r] ? 140 : 255, val[r] ? 255 : 140, 140);
             }
-            textCentered(false, 320, 340, mcOK ? "Se guarda en la memory card de la ranura 1" : "Sin memory card: el progreso no se guarda", 0.6f, mcOK ? 170 : 255, mcOK ? 255 : 170, 170);
+            textCentered(false, 320, 340, mcOK ? "Guardado manual: botón del disquete en el inicio" : "Sin memory card: no se puede guardar", 0.6f, mcOK ? 170 : 255, mcOK ? 255 : 170, 170);
             textCentered(false, 320, 396, "X: cambiar     Círculo: volver", 0.8f, 255, 255, 255);
         } else {
             drawDecor(game, 0);
@@ -772,6 +890,10 @@ int main(int, char**) {
                 spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);
+            if (game.mode() == M_PLAY && (game.fanCount() > 0 || game.balloonsLeft() > 0)) {     // cursor de la partida
+                tri(gcx, gcy, gcx + 14, gcy + 6, gcx + 6, gcy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
+                tri(gcx + 1, gcy + 1, gcx + 11, gcy + 6, gcx + 6, gcy + 11, rgba(0x20, 0x20, 0x20, 0x80));
+            }
         }
         if (optCursor && screen != S_GAME) {   // cursor de los menus
             tri(mcx, mcy, mcx + 14, mcy + 6, mcx + 6, mcy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
