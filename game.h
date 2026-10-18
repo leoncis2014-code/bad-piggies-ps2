@@ -12,7 +12,7 @@ struct GameInput {
     bool pressX = false, pressSquare = false, pressTriangle = false, pressCircle = false; // flancos
 };
 
-enum GameEvent { EV_CLICK = 1, EV_PLACE = 2, EV_GO = 4, EV_WIN = 8, EV_LOSE = 16, EV_STAR = 32 };
+enum GameEvent { EV_CLICK = 1, EV_PLACE = 2, EV_GO = 4, EV_WIN = 8, EV_LOSE = 16, EV_STAR = 32, EV_BAD = 64 };
 
 struct DrawItem { int type; float x, y, angle; };   // en pixeles de nivel, angulo en radianes (horario en pantalla)
 
@@ -37,6 +37,8 @@ public:
     bool isSandbox() const;
     int  gridCols() const;
     int  gridRows() const;
+    int  levelNumber() const;                  // numero que se muestra (el segundo mundo empieza en 16)
+    float vehicleMass() const;
     float zoomNow() const;                     // zoom actual (2 en juego; menor al construir en el sandbox)
     bool fansOn() const;
     int  balloonsLeft() const;

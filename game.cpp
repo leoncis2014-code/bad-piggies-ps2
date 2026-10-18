@@ -34,7 +34,11 @@ public:
     b2Body* chassis = nullptr;
     b2Body* wheels[MAXR*MAXC];
     int nwheels = 0;
-    bool fansOn = true;
+    bool fansOn = false;
+    unsigned char rot[MAXR][MAXC];            // orientacion de cada ventilador (0..3 = 0, 90, 180, 270 grados)
+    struct Seg { float x1, y1, x2, y2; };
+    std::vector<Seg> segs;                    // aristas del terreno: los globos revientan al tocarlo
+    static constexpr float FAN_N = 6.0f;      // empuje de cada ventilador (newtons): no depende del tamano del vehiculo
     bool popped[MAXR][MAXC];
     b2Fixture* thrFx[MAXR][MAXC];
     int wheelCell[MAXR*MAXC][2];
@@ -64,7 +68,7 @@ public:
     void reset(bool full) {
         delete world; world = nullptr; chassis = nullptr; nwheels = 0;
         if (full) {
-            for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) { cells[r][c] = -1; pig[r][c] = false; }
+            for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { cells[r][c] = -1; pig[r][c] = false; rot[r][c] = 0; }
             for (int k = 0; k < P_COUNT; k++) left[k] = L->pieces[k];
             sel = L->pieces[P_BOX] > 0 ? P_BOX : typeAtSlot(0);
         }
@@ -75,6 +79,45 @@ public:
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
 
+    // ---- reglas de construccion: todo debe estar pegado a una caja (o al cerdito)
+    bool isAnchor(int r, int c) const { return r >= 0 && c >= 0 && r < rows() && c < cols() && (cells[r][c] == P_BOX || pig[r][c]); }
+    bool adjAnchor(int r, int c) const { return isAnchor(r - 1, c) || isAnchor(r + 1, c) || isAnchor(r, c - 1) || isAnchor(r, c + 1); }
+    int anchorCount() const { int n = 0; for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) if (isAnchor(r, c)) n++; return n; }
+    bool canPlace(int type, int r, int c) const {
+        if (type == P_PIG) {
+            if (pig[r][c]) return false;
+            if (cells[r][c] == P_BOX) return true;                      // adentro de una caja
+            if (cells[r][c] >= 0) return false;
+            return anchorCount() == 0 || adjAnchor(r, c);
+        }
+        if (cells[r][c] >= 0) return false;
+        if (type == P_BOX) return anchorCount() == 0 || adjAnchor(r, c);
+        return adjAnchor(r, c);                                          // ruedas, ventiladores y globos: solo pegados a una caja
+    }
+    void cleanup() {                                                    // quita (y devuelve a la bandeja) lo que quedo suelto
+        static bool seen[MAXR][MAXC], keep[MAXR][MAXC];
+        for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { seen[r][c] = false; keep[r][c] = false; }
+        int sr = -1, sc = -1;
+        for (int r = 0; r < rows() && sr < 0; r++) for (int c = 0; c < cols(); c++) if (pig[r][c]) { sr = r; sc = c; break; }
+        for (int r = 0; r < rows() && sr < 0; r++) for (int c = 0; c < cols(); c++) if (cells[r][c] == P_BOX) { sr = r; sc = c; break; }
+        if (sr >= 0) {
+            static int qr[MAXR * MAXC], qc[MAXR * MAXC]; int qh = 0, qt = 0;
+            seen[sr][sc] = true; qr[qt] = sr; qc[qt++] = sc;
+            while (qh < qt) {
+                int r = qr[qh], c = qc[qh++]; keep[r][c] = true;
+                const int dr[4] = { -1, 1, 0, 0 }, dc[4] = { 0, 0, -1, 1 };
+                for (int k = 0; k < 4; k++) { int nr = r + dr[k], nc = c + dc[k]; if (isAnchor(nr, nc) && !seen[nr][nc]) { seen[nr][nc] = true; qr[qt] = nr; qc[qt++] = nc; } }
+            }
+            for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++)          // las piezas pegadas a una caja conectada tambien se quedan
+                if (cells[r][c] >= 0 && !isAnchor(r, c))
+                    for (int k = 0; k < 4; k++) { int nr = r + (k == 0 ? -1 : (k == 1 ? 1 : 0)), nc = c + (k == 2 ? -1 : (k == 3 ? 1 : 0)); if (nr >= 0 && nc >= 0 && nr < rows() && nc < cols() && keep[nr][nc]) keep[r][c] = true; }
+        }
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
+            if (keep[r][c]) continue;
+            if (pig[r][c]) { pig[r][c] = false; left[P_PIG]++; }
+            if (cells[r][c] >= 0) { left[cells[r][c]]++; cells[r][c] = -1; rot[r][c] = 0; }
+        }
+    }
     bool hasPig() const {
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) if (pig[r][c]) return true;
         return false;
@@ -111,6 +154,8 @@ public:
             ground->CreateFixture(&gf);
         }
         // chasis: una sola pieza rigida con las cajas y el cerdito
+        segs.clear();                                              // aristas del terreno en metros
+        for (int ri = 0; ri < L->nrings; ri++) { int a0 = L->ringStart[ri], b0 = L->ringStart[ri + 1]; for (int i = a0; i < b0; i++) { int j = (i + 1 < b0) ? i + 1 : a0; segs.push_back({ L->pts[i][0] / PPM, L->pts[i][1] / PPM, L->pts[j][0] / PPM, L->pts[j][1] / PPM }); } }
         b2BodyDef cd; cd.type = b2_dynamicBody; cd.position.Set(gx() / PPM, gy() / PPM);
         cd.allowSleep = false;
         chassis = world->CreateBody(&cd);
@@ -121,6 +166,7 @@ public:
             if (tp == P_FAN || tp == P_BALLOON) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
                 b2PolygonShape fs; fs.SetAsBox(0.36f, 0.36f, b2Vec2(lx, ly), 0.f);
                 b2FixtureDef ff; ff.shape = &fs; ff.density = 0.35f; ff.friction = 0.3f; ff.restitution = 0.1f;
+                if (tp == P_BALLOON) { ff.isSensor = true; ff.density = 0.2f; }       // el globo no es solido: no choca ni estorba
                 thrFx[r][c] = chassis->CreateFixture(&ff);
                 continue;
             }
@@ -191,15 +237,20 @@ public:
             if (in.pressX) {
                 int ti = trayAt(cx, cy);
                 if (ti >= 0) { sel = ti; events |= EV_CLICK; }
-                else if (cellAt(cx, cy, col, row) && left[sel] > 0) {
-                    if (sel == P_PIG) {
-                        if (cells[row][col] != P_WHEEL && cells[row][col] != P_FAN && cells[row][col] != P_BALLOON && !pig[row][col]) { pig[row][col] = true; left[P_PIG]--; events |= EV_PLACE; }
-                    } else if (cells[row][col] < 0) { cells[row][col] = sel; left[sel]--; events |= EV_PLACE; }
+                else if (cellAt(cx, cy, col, row)) {
+                    if (sel == P_FAN && cells[row][col] == P_FAN) { rot[row][col] = (unsigned char)((rot[row][col] + 1) & 3); events |= EV_CLICK; }   // X sobre un ventilador: lo gira
+                    else if (left[sel] > 0) {
+                        if (canPlace(sel, row, col)) {
+                            if (sel == P_PIG) pig[row][col] = true; else { cells[row][col] = sel; rot[row][col] = 0; }
+                            left[sel]--; events |= EV_PLACE;
+                        } else events |= EV_BAD;                                     // no se puede poner ahi (no toca ninguna caja)
+                    }
                 }
             }
             if (in.pressSquare && cellAt(cx, cy, col, row)) {
                 if (pig[row][col]) { pig[row][col] = false; left[P_PIG]++; events |= EV_CLICK; }
-                else if (cells[row][col] >= 0) { left[cells[row][col]]++; cells[row][col] = -1; events |= EV_CLICK; }
+                else if (cells[row][col] >= 0) { left[cells[row][col]]++; cells[row][col] = -1; rot[row][col] = 0; events |= EV_CLICK; }
+                cleanup();
             }
             if (in.pressTriangle && hasPig()) startPlay();
             return;
@@ -214,8 +265,23 @@ public:
             if (tp == P_BALLOON && popped[r][c]) continue;
             nthr++;
             if (tp == P_FAN && !fansOn) continue;
-            if (tp == P_FAN) { float a = chassis->GetAngle(); chassis->ApplyForceToCenter((4.0f * totalMass) * b2Vec2(cosf(a), sinf(a)), true); }   // ~4 m/s2 por ventilador
-            else chassis->ApplyForceToCenter(b2Vec2(0.f, -L->balloonLift * 10.f * totalMass), true);                                          // cada globo levanta una parte del peso (segun el nivel)
+            if (tp == P_FAN) { float a = chassis->GetAngle() + (float)rot[r][c] * 1.5707963f; chassis->ApplyForceToCenter(FAN_N * b2Vec2(cosf(a), sinf(a)), true); }   // empuje fijo en la direccion del ventilador
+            else chassis->ApplyForceToCenter(b2Vec2(0.f, -L->balloonLift), true);                                                                          // cada globo levanta una fuerza fija (no una parte del peso)
+        }
+        // un globo revienta al tocar el terreno
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
+            if (cells[r][c] != P_BALLOON || popped[r][c]) continue;
+            b2Vec2 bc = chassis->GetWorldPoint(b2Vec2(lxOf(c), lyOf(r)));
+            const float rr = 0.40f; bool hit = false;
+            for (size_t k = 0; k < segs.size() && !hit; k++) {
+                const Seg& sg = segs[k];
+                if (bc.x + rr < fminf(sg.x1, sg.x2) || bc.x - rr > fmaxf(sg.x1, sg.x2) || bc.y + rr < fminf(sg.y1, sg.y2) || bc.y - rr > fmaxf(sg.y1, sg.y2)) continue;
+                float dx = sg.x2 - sg.x1, dy = sg.y2 - sg.y1, l2 = dx * dx + dy * dy;
+                float t = l2 > 0.f ? ((bc.x - sg.x1) * dx + (bc.y - sg.y1) * dy) / l2 : 0.f; t = t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
+                float px = sg.x1 + t * dx - bc.x, py = sg.y1 + t * dy - bc.y;
+                if (px * px + py * py < rr * rr) hit = true;
+            }
+            if (hit && thrFx[r][c]) { popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; events |= EV_PLACE; }
         }
         chassis->SetLinearDamping(nthr > 0 ? 0.25f : 0.f);
         world->Step(dt, 8, 3);
@@ -266,9 +332,9 @@ public:
                         if (tp == P_WHEEL) continue;                  // las ruedas se dibujan aparte
                         if (tp == P_BALLOON && popped[r][c]) continue;  // globo pinchado
                         b2Vec2 w = chassis->GetWorldPoint(b2Vec2(lx, ly));
-                        out[n].type = tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle(); n++;
+                        out[n].type = tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle() + (tp == P_FAN ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
                     } else {
-                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + (tp == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = 0; n++;
+                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + (tp == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = (tp == P_FAN ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
                     }
                 } else if (pig[r][c]) {
                     if (playing) {
@@ -298,6 +364,8 @@ int Game::worldNow() const { return g->L->world; }
 void Game::toggleFans() { if (g->mode == M_PLAY) { g->fansOn = !g->fansOn; g->events |= EV_CLICK; } }
 void Game::popOneBalloon() { if (g->mode == M_PLAY) g->popBalloon(); }
 int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }
+int Game::levelNumber() const { return g->L->world == 1 ? 15 + Game::slotOf(g->levelIdx) + 1 : Game::slotOf(g->levelIdx) + 1; }
+float Game::vehicleMass() const { return g->totalMass; }
 float Game::zoomNow() const { return g->zoom(); }
 int Game::gridCols() const { return g->cols(); }
 int Game::gridRows() const { return g->rows(); }

@@ -30,6 +30,7 @@ extern unsigned char icon_ico[]; extern unsigned int size_icon_ico;
 extern unsigned char screen_title[]; extern unsigned int size_screen_title;
 extern unsigned char screen_worlds[]; extern unsigned int size_screen_worlds;
 extern unsigned char screen_levels[]; extern unsigned int size_screen_levels;
+extern unsigned char screen_levels2[]; extern unsigned int size_screen_levels2;
 extern unsigned char music_main[]; extern unsigned int size_music_main;
 extern unsigned char music_hai[]; extern unsigned int size_music_hai;
 extern unsigned char music_final[]; extern unsigned int size_music_final;
@@ -44,11 +45,12 @@ enum Screen { S_TITLE, S_WORLDS, S_SELECT, S_GAME, S_OPTIONS };
 
 // opciones (no se guardan al apagar la consola)
 static bool optCursor = false, optMusic = true, optSfx = true;
+static bool optTouch = true;          // modo de control: true = tactil (cursor y botones azules), false = fisico (botones del mando)
 
 // zonas de los menus, medidas sobre las imagenes originales (pantalla virtual 640x448)
 static const float MENU_PX[4] = { 87, 213, 339, 464 };                       // paneles de mundos: x (ancho 102, y 64..352)
 static const float MENU_TX[5] = { 148, 233, 319, 405, 490 }, MENU_TY[3] = { 65, 160, 252 };   // casillas de niveles (y + 24)
-static const float OPT_ROWY[4] = { 138, 188, 238, 300 };                     // filas de opciones
+static const float OPT_ROWY[5] = { 122, 158, 194, 230, 272 };                     // filas de opciones
 
 // ---------------------------------------------------------------- guardado en la memory card (ranura 1)
 struct SaveData { char magic[4]; int version; unsigned char stars[16]; unsigned char opt[4]; float best[16]; };
@@ -59,7 +61,7 @@ static bool g_newRecord = false;      // el ultimo nivel ganado batio el mejor t
 static float g_bestShown = 0.f;
 enum { FIO_RD = 0x0001, FIO_WR = 0x0002, FIO_CREAT = 0x0200, FIO_TRUNC = 0x0400 };
 static int mcResult() { int cmd = 0, res = 0; mcSync(0, &cmd, &res); return res; }
-static void saveClear() { memset(&sv, 0, sizeof(sv)); sv.magic[0] = 'B'; sv.magic[1] = 'P'; sv.magic[2] = 'G'; sv.magic[3] = '1'; sv.version = 1; sv.opt[1] = 1; sv.opt[2] = 1; }
+static void saveClear() { memset(&sv, 0, sizeof(sv)); sv.magic[0] = 'B'; sv.magic[1] = 'P'; sv.magic[2] = 'G'; sv.magic[3] = '1'; sv.version = 1; sv.opt[1] = 1; sv.opt[2] = 1; sv.opt[3] = 0; }
 static void saveInit() {
     saveClear();
     if (mcInit(MC_TYPE_MC) < 0) return;
@@ -103,7 +105,7 @@ static bool saveWrite() {
     if (ok) saveExists = true;
     return ok;
 }
-static void saveOptions() { sv.opt[0] = optCursor; sv.opt[1] = optMusic; sv.opt[2] = optSfx; }   // solo en memoria: se escribe con el boton del disquete
+static void saveOptions() { sv.opt[0] = optCursor; sv.opt[1] = optMusic; sv.opt[2] = optSfx; sv.opt[3] = optTouch ? 0 : 1; }   // solo en memoria: se escribe con el boton del disquete
 static void recordWin(const Game& g) {      // estrellas y mejor tiempo del nivel que se acaba de ganar
     int li = g.levelIndex(); if (li < 0 || li >= 16 || g.isSandbox()) return;
     int st = g.resultStars(); float ft = g.finalTime();
@@ -323,11 +325,14 @@ static int hitTest(Screen sc, float x, float y) {
         if (dx * dx + dy * dy < 56.f * 56.f) return 0;
         if (x >= 400 && x <= 560 && y >= 271 && y <= 311) return 1;
     } else if (sc == S_WORLDS) {
+        if (x >= 14 && x <= 96 && y >= 372 && y <= 414) return 10;                                  // flecha de volver (la del dibujo original)
         for (int i = 0; i < 4; i++) if (x >= MENU_PX[i] && x <= MENU_PX[i] + 102 && y >= 64 && y <= 352) return i;
     } else if (sc == S_SELECT) {
+        if (x >= 14 && x <= 96 && y >= 372 && y <= 414) return 10;
         for (int i = 0; i < 15; i++) { float cx = MENU_TX[i % 5], cy = 24 + MENU_TY[i / 5]; if (fabsf(x - cx) <= 36 && y >= cy - 36 && y <= cy + 52) return i; }
     } else if (sc == S_OPTIONS) {
-        for (int r = 0; r < 4; r++) if (x >= 110 && x <= 530 && y >= OPT_ROWY[r] - 8 && y <= OPT_ROWY[r] + 36) return r;
+        if (x >= 14 && x <= 96 && y >= 372 && y <= 414) return 10;                                  // flecha de volver
+        for (int r = 0; r < 5; r++) if (x >= 110 && x <= 530 && y >= OPT_ROWY[r] - 6 && y <= OPT_ROWY[r] + 30) return r;
     }
     return -1;
 }
@@ -401,7 +406,7 @@ static void terrainLoad(const Game& g) {
 }
 static void screenLoad(int idx) {            // sube la imagen pedida a la memoria de video (se hace al cambiar de pantalla)
     if (idx == slotOwner) return;
-    const unsigned char* src = idx == SCR_TITLE ? screen_title : (idx == SCR_WORLDS ? screen_worlds : screen_levels);
+    const unsigned char* src = idx == SCR_TITLE ? screen_title : (idx == SCR_WORLDS ? screen_worlds : (idx == SCR_LEVELS2 ? screen_levels2 : screen_levels));
     memcpy(texScreen.Mem, src, SCR_W * SCR_H * 2);
     FlushCache(0);
     gsKit_texture_upload(gs, &texScreen);
@@ -519,8 +524,8 @@ static void drawGameUI(const Game& g) {
         tri(cx, cy, cx + 14, cy + 6, cx + 6, cy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
         tri(cx + 1, cy + 1, cx + 11, cy + 6, cx + 6, cy + 11, rgba(0x20, 0x20, 0x20, 0x80));
     } else if (g.mode() == M_PLAY) {
-        if (g.fanCount() > 0 || g.balloonsLeft() > 0) drawPlayButtons(g);
-        if (g.fanCount() > 0 || g.balloonsLeft() > 0) textCentered(false, 320, 408, "Cursor + X sobre los botones azules   Círculo: construir", 0.62f, 255, 255, 255);
+        if (optTouch && (g.fanCount() > 0 || g.balloonsLeft() > 0)) drawPlayButtons(g);
+        if (g.fanCount() > 0 || g.balloonsLeft() > 0) textCentered(false, 320, 408, optTouch ? "Cursor + X sobre los botones azules   Círculo: construir" : "R1: ventilador   L1: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
         else if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir   Stick derecho: cámara", 0.62f, 255, 255, 255);
         if (g.isSandbox()) {
             char b2[48];
@@ -562,7 +567,7 @@ static void drawGameUI(const Game& g) {
     if (g.levelData().starX > -1e8f && g.mode() != M_BUILD)   // la caja estrella: icono dorado si ya se recogio
         sprite(texDecor[DEC_GOLDSTAR], 446, 35, 28, 27, 0, g.starCollected() ? rgba(0x80, 0x80, 0x80, 0x80) : rgba(0x38, 0x38, 0x38, 0x70));
     if (g.isSandbox()) snprintf(buf, sizeof(buf), "Sandbox");
-    else snprintf(buf, sizeof(buf), "Nivel %d", g.levelIndex() + 1);
+    else snprintf(buf, sizeof(buf), "Nivel %d", g.levelNumber());
     textLeft(30, 22, buf, 0.9f, 255, 255, 255);
 }
 
@@ -578,7 +583,7 @@ int main(int, char**) {
     padInit(0);
     padPortOpen(0, 0, padBuf);
     saveInit();
-    if (saveLoad()) { optCursor = sv.opt[0] != 0; optMusic = sv.opt[1] != 0; optSfx = sv.opt[2] != 0; }
+    if (saveLoad()) { optCursor = sv.opt[0] != 0; optMusic = sv.opt[1] != 0; optSfx = sv.opt[2] != 0; optTouch = sv.opt[3] == 0; }
     audioInit();
 
     gs = gsKit_init_global();
@@ -646,7 +651,7 @@ int main(int, char**) {
         bool pX = pad.edge & PAD_CROSS, pO = pad.edge & PAD_CIRCLE, pT = pad.edge & PAD_TRIANGLE, pS = pad.edge & PAD_SQUARE, pStart = pad.edge & PAD_START;
 
         // ---------------- logica por pantalla ----------------
-        bool useCur = optCursor && screen != S_GAME;       // cursor libre en los menus (opcion)
+        bool useCur = (optCursor || optTouch) && screen != S_GAME;       // cursor libre en los menus (opcion)
         int hover = -1;
         if (useCur) {
             mcx += pad.ax * 320.f * dt; mcy += pad.ay * 320.f * dt;
@@ -655,7 +660,7 @@ int main(int, char**) {
             if (mcy < 0) { mcy = 0; }
             if (mcy > SCREEN_H) { mcy = SCREEN_H; }
             hover = hitTest(screen, mcx, mcy);
-            if (hover >= 0) {
+            if (hover >= 0 && hover < 10) {
                 if (screen == S_TITLE) { if (!confirmOpen) titleSel = hover; } else if (screen == S_WORLDS) wsel = hover;
                 else if (screen == S_SELECT) sel = hover; else if (screen == S_OPTIONS) optSel = hover;
             }
@@ -701,13 +706,14 @@ int main(int, char**) {
         } else if (screen == S_OPTIONS) {
             if (nav) {
                 if (pad.eU && optSel > 0) { optSel--; sndPlay(SND_CLICK); }
-                if (pad.eD && optSel < 3) { optSel++; sndPlay(SND_CLICK); }
+                if (pad.eD && optSel < 4) { optSel++; sndPlay(SND_CLICK); }
             }
-            if (pO) { sndPlay(SND_CLICK); saveOptions(); screen = S_TITLE; }
-            else if (act) {
+            if (pO || (act && hover == 10)) { sndPlay(SND_CLICK); saveOptions(); screen = S_TITLE; }
+            else if (act && hover < 10) {
                 if (optSel == 0) optCursor = !optCursor;
-                else if (optSel == 1) optMusic = !optMusic;
-                else if (optSel == 2) optSfx = !optSfx;
+                else if (optSel == 1) optTouch = !optTouch;
+                else if (optSel == 2) optMusic = !optMusic;
+                else if (optSel == 3) optSfx = !optSfx;
                 else { saveOptions(); screen = S_TITLE; }
                 sndPlay(SND_CLICK);
             }
@@ -716,8 +722,8 @@ int main(int, char**) {
                 if (pad.eL && wsel > 0) { wsel--; sndPlay(SND_CLICK); }
                 if (pad.eR && wsel < 3) { wsel++; sndPlay(SND_CLICK); }
             }
-            if (pO) { sndPlay(SND_CLICK); screen = S_TITLE; }
-            else if (act) {
+            if (pO || (act && hover == 10)) { sndPlay(SND_CLICK); screen = S_TITLE; }
+            else if (act && hover < 10) {
                 if (wsel == 0 || wsel == 1) { selWorld = wsel; sel = 0; sndPlay(SND_CLICK); screen = S_SELECT; }
                 else if (wsel == 3) { if (game.loadLevel(Game::sandboxIndex())) { sndPlay(SND_CLICK); screen = S_GAME; } }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
@@ -732,8 +738,8 @@ int main(int, char**) {
                 if (pad.eD && row < 2) { sel += 5; moved = true; }
                 if (moved) sndPlay(SND_CLICK);
             }
-            if (pO) { sndPlay(SND_CLICK); screen = S_WORLDS; }
-            else if (act) {
+            if (pO || (act && hover == 10)) { sndPlay(SND_CLICK); screen = S_WORLDS; }
+            else if (act && hover < 10) {
                 int li = Game::levelAt(selWorld, sel);
                 if (li >= 0 && game.loadLevel(li)) { sndPlay(SND_CLICK); screen = S_GAME; }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
@@ -747,7 +753,11 @@ int main(int, char**) {
                 else { selWorld = w; sel = slot < 15 ? slot : 14; screen = S_SELECT; msgTimer = 3.0f; keepMsg = true; }
                 handled = true;
             }
-            if (!handled && game.mode() == M_PLAY) {                      // cursor de la partida: se mueve con el stick izquierdo
+            if (!handled && game.mode() == M_PLAY && !optTouch) {         // modo fisico: R1 enciende/apaga el ventilador, L1 pincha un globo
+                if (pad.edge & PAD_R1) game.toggleFans();
+                if (pad.edge & PAD_L1) game.popOneBalloon();
+            }
+            if (!handled && game.mode() == M_PLAY && optTouch) {          // modo tactil: cursor de la partida (stick izquierdo) y botones azules
                 gcx += pad.ax * 320.f * dt; gcy += pad.ay * 320.f * dt;
                 if (gcx < 0) { gcx = 0; }
                 if (gcx > SCREEN_W) { gcx = SCREEN_W; }
@@ -767,6 +777,7 @@ int main(int, char**) {
                 else if (ev & EV_STAR) sndPlay(SND_STAR);
                 else if (ev & EV_LOSE) sndPlay(SND_LOSE);
                 else if (ev & EV_GO) sndPlay(SND_GO);
+                else if (ev & EV_BAD) sndPlay(SND_CLICK);
                 else if (ev & EV_PLACE) sndPlay(SND_PLACE);
                 else if (ev & EV_CLICK) sndPlay(SND_CLICK);
             }
@@ -781,7 +792,7 @@ int main(int, char**) {
         if (screen == S_GAME) terrainLoad(game);
         if (screen == S_TITLE || screen == S_OPTIONS) screenLoad(SCR_TITLE);
         else if (screen == S_WORLDS) screenLoad(SCR_WORLDS);
-        else if (screen == S_SELECT) screenLoad(SCR_LEVELS);
+        else if (screen == S_SELECT) screenLoad(selWorld == 1 ? SCR_LEVELS2 : SCR_LEVELS);
         gsKit_clear(gs, rgba(0xB4, 0xDC, 0xFF, 0x80));   // alfa 0x80 = opaco (con 0x00 no se borra la pantalla)
         if (screen == S_TITLE) {
             screenDraw(SCR_TITLE);                                           // pantalla de inicio original
@@ -832,10 +843,15 @@ int main(int, char**) {
                 textCentered(false, 320, 190, "Aguarde a la sig. actualización", 1.15f, 255, 240, 120);
             }
         } else if (screen == S_SELECT) {
-            screenDraw(SCR_LEVELS);                                          // selector de niveles original
+            screenDraw(selWorld == 1 ? SCR_LEVELS2 : SCR_LEVELS);            // selector de niveles original (el 2.o mundo empieza en 16)
             for (int i = 0; i < 15; i++) {
                 float cx = MENU_TX[i % 5], cy = 24 + MENU_TY[i / 5];
-                if (i >= Game::levelCount(selWorld)) rect(cx - 35, cy - 35, cx + 35, cy + 52, rgba(0x10, 0x20, 0x30, 0x50));   // velo: no existe todavia
+                if (i >= Game::levelCount(selWorld) && selWorld == 0) {        // nivel que no existe: candado (en el 2.o mundo el dibujo ya los trae)
+                    rect(cx - 33, cy - 33, cx + 33, cy + 33, rgba(0x6C, 0xBF, 0x3A, 0x80));
+                    frameRect(cx - 12, cy - 30, cx + 12, cy - 4, 5.f, rgba(0xC8, 0xCC, 0xD2, 0x80));
+                    rect(cx - 19, cy - 8, cx + 19, cy + 22, rgba(0xF0, 0xC8, 0x20, 0x80));
+                    rect(cx - 3, cy + 3, cx + 3, cy + 15, rgba(0x60, 0x48, 0x10, 0x80));
+                } else if (i >= Game::levelCount(selWorld)) { }
                 else { int li = Game::levelAt(selWorld, i); for (int k = 0; li >= 0 && k < (int)sv.stars[li] && k < 3; k++) sprite(texDecor[DEC_GOLDSTAR], cx + (k - 1) * 17.f, cy + 47, 17, 16, 0); }   // estrellas ganadas
                 if (i == sel) {
                     float pulse = 2.f + 2.f * sinf(clock * 6.f);
@@ -854,17 +870,23 @@ int main(int, char**) {
             rect(100, 64, 540, 372, rgba(0x10, 0x20, 0x30, 0x70));
             frameRect(100, 64, 540, 372, 3.f, rgba(0xD8, 0xDC, 0xE0, 0x80));
             textCentered(false, 320, 76, "Opciones", 1.5f, 255, 240, 120);
-            static const char* LABEL[4] = { "Cursor en los menús", "Música", "Efectos de sonido", "Volver" };
-            bool val[3] = { optCursor, optMusic, optSfx };
-            for (int r = 0; r < 4; r++) {
+            static const char* LABEL[5] = { "Cursor en menús", "Modo de control", "Música", "Efectos de sonido", "Volver" };
+            for (int r = 0; r < 5; r++) {
                 float y = OPT_ROWY[r];
                 if (r == optSel) {
                     float pulse = 1.5f + 1.5f * sinf(clock * 6.f);
-                    frameRect(118 - pulse, y - 8 - pulse, 522 + pulse, y + 34 + pulse, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                    frameRect(118 - pulse, y - 6 - pulse, 522 + pulse, y + 30 + pulse, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
                 }
-                textLeft(135, y, LABEL[r], 1.05f, 255, 255, 255);
-                if (r < 3) textLeft(462, y, val[r] ? "Sí" : "No", 1.1f, val[r] ? 140 : 255, val[r] ? 255 : 140, 140);
+                textLeft(135, y, LABEL[r], 1.0f, 255, 255, 255);
+                if (r == 0) { bool on = optCursor || optTouch; textLeft(420, y, optTouch ? "Sí (táctil)" : (optCursor ? "Sí" : "No"), 1.0f, on ? 140 : 255, on ? 255 : 140, 140); }
+                else if (r == 1) textLeft(420, y, optTouch ? "Táctil" : "Físico", 1.0f, 140, 220, 255);
+                else if (r == 2) textLeft(420, y, optMusic ? "Sí" : "No", 1.0f, optMusic ? 140 : 255, optMusic ? 255 : 140, 140);
+                else if (r == 3) textLeft(420, y, optSfx ? "Sí" : "No", 1.0f, optSfx ? 140 : 255, optSfx ? 255 : 140, 140);
             }
+            rect(16, 374, 94, 412, rgba(0x6C, 0xBF, 0x3A, 0x80));              // flecha de volver
+            frameRect(16, 374, 94, 412, 3.f, rgba(0x3A, 0x7A, 0x22, 0x80));
+            tri(30, 393, 52, 380, 52, 406, rgba(0xFF, 0xFF, 0xFF, 0x80)); rect(50, 389, 80, 397, rgba(0xFF, 0xFF, 0xFF, 0x80));
+            textCentered(false, 320, 314, optTouch ? "Táctil: cursor y botones azules en pantalla" : "Físico: R1 ventilador, L1 pinchar globo", 0.6f, 200, 220, 255);
             textCentered(false, 320, 340, mcOK ? "Guardado manual: botón del disquete en el inicio" : "Sin memory card: no se puede guardar", 0.6f, mcOK ? 170 : 255, mcOK ? 255 : 170, 170);
             textCentered(false, 320, 396, "X: cambiar     Círculo: volver", 0.8f, 255, 255, 255);
         } else {
@@ -887,10 +909,11 @@ int main(int, char**) {
             static DrawItem items[768]; int n = game.drawList(items, 768);
             for (int i = 0; i < n; i++) {
                 float sx, sy; worldToScreen(game, items[i].x, items[i].y, sx, sy);
+                if (items[i].type == P_FAN) { float cs = 31.f * game.zoomNow() * 0.98f; sprite(texDecor[DEC_FAN], sx, sy, cs, cs, items[i].angle); continue; }
                 spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);
-            if (game.mode() == M_PLAY && (game.fanCount() > 0 || game.balloonsLeft() > 0)) {     // cursor de la partida
+            if (optTouch && game.mode() == M_PLAY && (game.fanCount() > 0 || game.balloonsLeft() > 0)) {     // cursor de la partida
                 tri(gcx, gcy, gcx + 14, gcy + 6, gcx + 6, gcy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
                 tri(gcx + 1, gcy + 1, gcx + 11, gcy + 6, gcx + 6, gcy + 11, rgba(0x20, 0x20, 0x20, 0x80));
             }

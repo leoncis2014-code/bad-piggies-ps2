@@ -4,7 +4,7 @@ GSKIT ?= $(PS2DEV)/gsKit
 BOX2D = third_party/box2d
 B2_SRC = $(wildcard $(BOX2D)/src/collision/*.cpp) $(wildcard $(BOX2D)/src/common/*.cpp) $(wildcard $(BOX2D)/src/dynamics/*.cpp) $(wildcard $(BOX2D)/src/rope/*.cpp)
 B2_OBJS = $(B2_SRC:.cpp=.o)
-EE_OBJS = ps2_main.o game.o sprites.o font.o sounds.o audsrv_irx.o decor_raw.o terrain1_raw.o terrain2_raw.o icon_sys.o icon_ico.o screen_title.o screen_worlds.o screen_levels.o music_main.o music_hai.o music_final.o $(B2_OBJS)
+EE_OBJS = ps2_main.o game.o sprites.o font.o sounds.o audsrv_irx.o decor_raw.o terrain1_raw.o terrain2_raw.o icon_sys.o icon_ico.o screen_title.o screen_worlds.o screen_levels.o screen_levels2.o music_main.o music_hai.o music_final.o $(B2_OBJS)
 EE_INCS += -I$(GSKIT)/include -I$(BOX2D)/include -I$(BOX2D)/src -I.
 EE_LDFLAGS += -L$(GSKIT)/lib
 EE_CFLAGS += -O2
@@ -28,6 +28,8 @@ screen_title.c: screen_title.raw
 	$(PS2SDK)/bin/bin2c $< $@ screen_title
 screen_worlds.c: screen_worlds.raw
 	$(PS2SDK)/bin/bin2c $< $@ screen_worlds
+screen_levels2.c: screen_levels2.raw
+	$(PS2SDK)/bin/bin2c $< $@ screen_levels2
 screen_levels.c: screen_levels.raw
 	$(PS2SDK)/bin/bin2c $< $@ screen_levels
 icon_sys.c: icon.sys
