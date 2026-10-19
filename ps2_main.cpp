@@ -918,7 +918,7 @@ int main(int, char**) {
                 tri(gcx + 1, gcy + 1, gcx + 11, gcy + 6, gcx + 6, gcy + 11, rgba(0x20, 0x20, 0x20, 0x80));
             }
         }
-        if (optCursor && screen != S_GAME) {   // cursor de los menus
+        if ((optCursor || optTouch) && screen != S_GAME) {   // cursor de los menus (siempre visible cuando los menus lo usan: modo tactil o la opcion del cursor)
             tri(mcx, mcy, mcx + 14, mcy + 6, mcx + 6, mcy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
             tri(mcx + 1, mcy + 1, mcx + 11, mcy + 6, mcx + 6, mcy + 11, rgba(0x20, 0x20, 0x20, 0x80));
         }
