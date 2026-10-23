@@ -39,6 +39,8 @@ public:
     int  gridRows() const;
     int  levelNumber() const;                  // numero que se muestra (el segundo mundo empieza en 16)
     float vehicleMass() const;
+    int  trayHit(float sx, float sy) const;    // tipo de pieza de la bandeja bajo ese punto (-1 si ninguno)
+    bool pigPlaced() const;
     float zoomNow() const;                     // zoom actual (2 en juego; menor al construir en el sandbox)
     bool fansOn() const;
     int  balloonsLeft() const;

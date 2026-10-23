@@ -52,7 +52,7 @@ public:
     float lyOf(int r) const { return (float)r - (float)(rows() - 1) * 0.5f; }
     float zoom() const {                      // al construir se aleja lo necesario para que entre toda la rejilla
         if (mode != M_BUILD) return ZOOM;
-        float z = 560.f / ((float)cols() * CELL);
+        float z = 420.f / ((float)cols() * CELL);       // deja lugar a los botones del costado
         return z < ZOOM ? z : ZOOM;
     }
     float gx() const { return L->gridX0 + (cols() - 1) * 0.5f * CELL; }                 // centro horizontal de la rejilla (px)
@@ -366,6 +366,8 @@ void Game::popOneBalloon() { if (g->mode == M_PLAY) g->popBalloon(); }
 int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }
 int Game::levelNumber() const { return g->L->world == 1 ? 15 + Game::slotOf(g->levelIdx) + 1 : Game::slotOf(g->levelIdx) + 1; }
 float Game::vehicleMass() const { return g->totalMass; }
+int Game::trayHit(float sx, float sy) const { return g->trayAt(sx, sy); }
+bool Game::pigPlaced() const { return g->hasPig(); }
 float Game::zoomNow() const { return g->zoom(); }
 int Game::gridCols() const { return g->cols(); }
 int Game::gridRows() const { return g->rows(); }

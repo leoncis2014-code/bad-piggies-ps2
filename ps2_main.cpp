@@ -385,6 +385,84 @@ static void drawPlayButtons(const Game& g) {
     }
 }
 
+// ---------------------------------------------------------------- interfaz tactil (como el juego original)
+static bool g_paused = false, g_trash = false;        // menu de pausa abierto / modo tacho (X sobre una casilla borra)
+static void thickLine(float x1, float y1, float x2, float y2, float th, u64 col) {
+    float dx = x2 - x1, dy = y2 - y1, l = sqrtf(dx * dx + dy * dy); if (l < 0.01f) return;
+    float nx = -dy / l * th * 0.5f, ny = dx / l * th * 0.5f;
+    tri(x1 + nx, y1 + ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, col); tri(x1 + nx, y1 + ny, x2 - nx, y2 - ny, x1 - nx, y1 - ny, col);
+}
+static void roundButton(float cx, float cy, float r, bool blue, bool hot, bool dim = false) {
+    disc(cx, cy, r, dim ? rgba(0x50, 0x60, 0x70, 0x80) : (blue ? rgba(0x2F, 0x84, 0xDE, 0x80) : rgba(0x6C, 0xBF, 0x3A, 0x80)));
+    ring(cx, cy, r, 3.f, dim ? rgba(0x90, 0xA0, 0xB0, 0x80) : (blue ? rgba(0xB8, 0xE0, 0xFF, 0x80) : rgba(0x3A, 0x7A, 0x22, 0x80)));
+    if (hot) ring(cx, cy, r + 6.f, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+}
+static void glyphPause(float cx, float cy) { u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80); rect(cx - 9, cy - 11, cx - 3, cy + 11, w); rect(cx + 3, cy - 11, cx + 9, cy + 11, w); }
+static void glyphRestart(float cx, float cy) { u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80); ring(cx, cy, 11.f, 4.f, w); tri(cx + 4, cy - 17, cx + 4, cy - 5, cx + 15, cy - 11, w); }
+static void glyphTrash(float cx, float cy) {
+    u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80), d = rgba(0x2F, 0x84, 0xDE, 0x80);
+    rect(cx - 10, cy - 11, cx + 10, cy - 7, w); rect(cx - 3, cy - 14, cx + 3, cy - 11, w);
+    rect(cx - 8, cy - 5, cx + 8, cy + 13, w); rect(cx - 4, cy - 2, cx - 2, cy + 10, d); rect(cx + 2, cy - 2, cx + 4, cy + 10, d);
+}
+static void glyphCheck(float cx, float cy) { u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80); thickLine(cx - 12, cy + 1, cx - 4, cy + 10, 6.f, w); thickLine(cx - 4, cy + 10, cx + 13, cy - 10, 6.f, w); }
+static void glyphPlay(float cx, float cy, float s) { tri(cx - 8 * s, cy - 13 * s, cx - 8 * s, cy + 13 * s, cx + 14 * s, cy, rgba(0xFF, 0xFF, 0xFF, 0x80)); }
+static void glyphSound(float cx, float cy, bool on) {
+    u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80);
+    rect(cx - 12, cy - 6, cx - 5, cy + 6, w); tri(cx - 5, cy - 6, cx - 5, cy + 6, cx + 6, cy + 14, w); tri(cx - 5, cy - 6, cx + 6, cy + 14, cx + 6, cy - 14, w);
+    if (on) { thickLine(cx + 10, cy - 7, cx + 14, cy - 11, 3.f, w); thickLine(cx + 10, cy, cx + 17, cy, 3.f, w); thickLine(cx + 10, cy + 7, cx + 14, cy + 11, 3.f, w); }
+    else { thickLine(cx + 9, cy - 8, cx + 19, cy + 8, 4.f, rgba(0xFF, 0x60, 0x60, 0x80)); thickLine(cx + 19, cy - 8, cx + 9, cy + 8, 4.f, rgba(0xFF, 0x60, 0x60, 0x80)); }
+}
+static void glyphGrid(float cx, float cy) { u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80); for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) rect(cx + i * 10 - 4, cy + j * 10 - 4, cx + i * 10 + 4, cy + j * 10 + 4, w); }
+static const float HUD_PX = 50.f, HUD_PY = 66.f, HUD_RY = 122.f;                 // pausa y reiniciar (arriba a la izquierda)
+static bool buildButtons(const Game& g, float& tx, float& kx, float& by) {     // tacho a la izquierda de la rejilla y tilde a la derecha
+    if (g.gridCols() < 1) return false;
+    float ax, ay, bx, bY, half = 31.f * g.zoomNow() * 0.5f;
+    g.cellScreen(0, 0, ax, ay); g.cellScreen(g.gridCols() - 1, g.gridRows() - 1, bx, bY);
+    by = (ay + bY) * 0.5f; tx = ax - half - 42.f; kx = bx + half + 42.f;
+    if (tx < 70.f) tx = 70.f;
+    if (kx > 570.f) kx = 570.f;
+    return true;
+}
+// que boton de la interfaz esta bajo (x,y): 1 pausa, 2 reiniciar, 3 tacho, 4 tilde; en pausa: 11 seguir, 12 sonido, 13 niveles
+static int hudHit(const Game& g, bool paused, float x, float y) {
+    auto in = [&](float cx, float cy, float r) { float dx = x - cx, dy = y - cy; return dx * dx + dy * dy < r * r; };
+    if (paused) { if (in(100, 150, 44)) return 11; if (in(100, 250, 38)) return 12; if (in(100, 350, 38)) return 13; return 0; }
+    if (g.mode() != M_BUILD && g.mode() != M_PLAY) return 0;
+    if (in(HUD_PX, HUD_PY, 30)) return 1;
+    if (in(HUD_PX, HUD_RY, 30)) return 2;
+    if (g.mode() == M_BUILD) { float tx, kx, by; if (buildButtons(g, tx, kx, by)) { if (in(tx, by, 34)) return 3; if (in(kx, by, 34)) return 4; } }
+    return 0;
+}
+static void drawTouchHud(const Game& g, float hx, float hy) {
+    if (g.mode() != M_BUILD && g.mode() != M_PLAY) return;
+    int h = hudHit(g, false, hx, hy);
+    roundButton(HUD_PX, HUD_PY, 24.f, false, h == 1); glyphPause(HUD_PX, HUD_PY);
+    roundButton(HUD_PX, HUD_RY, 24.f, false, h == 2); glyphRestart(HUD_PX, HUD_RY);
+    if (g.mode() == M_BUILD) {
+        float tx, kx, by;
+        if (buildButtons(g, tx, kx, by)) {
+            roundButton(tx, by, 28.f, true, h == 3 || g_trash); glyphTrash(tx, by);
+            roundButton(kx, by, 28.f, true, h == 4, !g.pigPlaced()); glyphCheck(kx, by);
+        }
+    }
+}
+static void drawPauseMenu(const Game& g) {
+    rect(0, 0, 200, SCREEN_H, rgba(0x00, 0x00, 0x00, 0x68));
+    char b[24]; if (g.isSandbox()) snprintf(b, sizeof(b), "Sandbox"); else snprintf(b, sizeof(b), "Nivel %d", g.levelNumber());
+    textLeft(26, 30, b, 1.5f, 255, 255, 255);
+    int h = hudHit(g, true, gcx, gcy);
+    roundButton(100, 150, 40.f, false, h == 11); glyphPlay(100, 150, 1.3f);
+    roundButton(100, 250, 34.f, false, h == 12); glyphSound(100, 250, optMusic || optSfx);
+    roundButton(100, 350, 34.f, false, h == 13); glyphGrid(100, 350);
+}
+// filas del cuadro de fin de nivel: victoria 1 siguiente / 2 repetir / 3 elegir nivel; derrota 2 repetir / 3 elegir nivel
+static int endRowAt(bool win, float x, float y) {
+    if (x < 150 || x > 490) return 0;
+    if (win) { if (y >= 288 && y < 320) return 1; if (y >= 320 && y < 352) return 2; if (y >= 352 && y < 384) return 3; }
+    else { if (y >= 211 && y < 249) return 2; if (y >= 256 && y < 294) return 3; }
+    return 0;
+}
+
 // ---------------------------------------------------------------- pantallas originales
 static void screenInit() {
     memset(&texScreen, 0, sizeof(texScreen));
@@ -492,6 +570,14 @@ static void drawTerrain(const Game& g) {
     }
 }
 
+static void endRowDraw(float ytop, float h, const char* text, float scale, int code, bool win) {   // fila del cuadro de fin: boton en modo tactil
+    if (optTouch) {
+        bool hot = endRowAt(win, gcx, gcy) == code;
+        rect(150, ytop, 490, ytop + h - 2, rgba(0x6C, 0xBF, 0x3A, 0x50));
+        frameRect(150, ytop, 490, ytop + h - 2, 2.f, hot ? rgba(0xFF, 0xE0, 0x20, 0x80) : rgba(0x3A, 0x7A, 0x22, 0x80));
+    }
+    textCentered(false, 320, ytop + 2, text, scale, 255, 255, 255);
+}
 static void drawGameUI(const Game& g) {
     char buf[64];
     if (g.mode() == M_BUILD) {
@@ -519,10 +605,7 @@ static void drawGameUI(const Game& g) {
             else for (int k = 0; k < g.remaining(i); k++) rect(sx - 24 + k * 10, sy + 20, sx - 18 + k * 10, sy + 26, rgba(0xFF, 0xFF, 0xFF, 0x80));
             if (g.selected() == i) frameRect(sx - 30, sy - 30, sx + 30, sy + 30, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
         }
-        textCentered(false, 320, 412, "X: poner   Cuadrado: quitar   Triángulo: iniciar   START: menú", 0.62f, 255, 255, 255);
-        float cx, cy; g.cursor(cx, cy);
-        tri(cx, cy, cx + 14, cy + 6, cx + 6, cy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
-        tri(cx + 1, cy + 1, cx + 11, cy + 6, cx + 6, cy + 11, rgba(0x20, 0x20, 0x20, 0x80));
+        textCentered(false, 320, 412, optTouch ? "X: poner   Tacho: borrar   Tilde: iniciar   START: pausa" : "X: poner   Cuadrado: quitar   Triángulo: iniciar   START: menú", 0.62f, 255, 255, 255);   // el cursor se dibuja al final, encima de los botones
     } else if (g.mode() == M_PLAY) {
         if (optTouch && (g.fanCount() > 0 || g.balloonsLeft() > 0)) drawPlayButtons(g);
         if (g.fanCount() > 0 || g.balloonsLeft() > 0) textCentered(false, 320, 408, optTouch ? "Cursor + X sobre los botones azules   Círculo: construir" : "R1: ventilador   L1: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
@@ -550,15 +633,15 @@ static void drawGameUI(const Game& g) {
         if (g_newRecord) textCentered(false, 320, 234, "¡Nuevo récord!", 0.9f, 255, 230, 90);
         else if (g_bestShown > 0.f) { snprintf(buf, sizeof(buf), "Mejor tiempo: %.1f s", g_bestShown); textCentered(false, 320, 234, buf, 0.8f, 220, 220, 220); }
         if (LD.parTime > 0.f) { snprintf(buf, sizeof(buf), "Estrella de tiempo: %.1f s o menos", LD.parTime); textCentered(false, 320, 262, buf, 0.6f, 200, 200, 200); }
-        textCentered(false, 320, 290, "X: siguiente nivel", 1.0f, 255, 255, 255);
-        textCentered(false, 320, 322, "Círculo: repetir este nivel", 1.0f, 255, 255, 255);
-        textCentered(false, 320, 354, "Triángulo: elegir nivel", 1.0f, 255, 255, 255);
+        endRowDraw(288, 32, optTouch ? "Siguiente nivel" : "X: siguiente nivel", 1.0f, 1, true);
+        endRowDraw(320, 32, optTouch ? "Repetir este nivel" : "Círculo: repetir este nivel", 1.0f, 2, true);
+        endRowDraw(352, 32, optTouch ? "Elegir nivel" : "Triángulo: elegir nivel", 1.0f, 3, true);
     } else if (g.mode() == M_LOSE) {
         rect(110, 110, 530, 330, rgba(0x10, 0x20, 0x30, 0x60));
         frameRect(110, 110, 530, 330, 3.f, rgba(0xD0, 0x40, 0x40, 0x80));
         textCentered(false, 320, 128, "¡Perdiste!", 1.45f, 255, 140, 140);
-        textCentered(false, 320, 215, "Círculo: reintentar", 1.1f, 255, 255, 255);
-        textCentered(false, 320, 260, "Triángulo: elegir nivel", 1.1f, 255, 255, 255);
+        endRowDraw(211, 38, optTouch ? "Reintentar" : "Círculo: reintentar", 1.1f, 2, false);
+        endRowDraw(256, 38, optTouch ? "Elegir nivel" : "Triángulo: elegir nivel", 1.1f, 3, false);
     }
     if (g.mode() == M_PLAY || g.mode() == M_WIN) {          // cronometro
         snprintf(buf, sizeof(buf), "Tiempo: %.1f s", g.mode() == M_WIN ? g.finalTime() : g.time());
@@ -568,7 +651,7 @@ static void drawGameUI(const Game& g) {
         sprite(texDecor[DEC_GOLDSTAR], 446, 35, 28, 27, 0, g.starCollected() ? rgba(0x80, 0x80, 0x80, 0x80) : rgba(0x38, 0x38, 0x38, 0x70));
     if (g.isSandbox()) snprintf(buf, sizeof(buf), "Sandbox");
     else snprintf(buf, sizeof(buf), "Nivel %d", g.levelNumber());
-    textLeft(30, 22, buf, 0.9f, 255, 255, 255);
+    textLeft(100, 22, buf, 0.9f, 255, 255, 255);
 }
 
 // ---------------------------------------------------------------- principal
@@ -746,8 +829,48 @@ int main(int, char**) {
             }
         } else {   // S_GAME
             bool handled = false;
-            if (pStart || (pT && (game.mode() == M_WIN || game.mode() == M_LOSE))) { if (game.isSandbox()) screen = S_WORLDS; else { selWorld = game.worldNow(); sel = Game::slotOf(game.levelIndex()); screen = S_SELECT; } handled = true; }
-            else if (game.mode() == M_WIN && pX) {
+            const bool endPanel = (game.mode() == M_WIN || game.mode() == M_LOSE);
+            bool cX = pX, cO = pO, cT = pT, cS = pS, toMenu = false;     // acciones efectivas: el cursor tactil tambien las genera
+            if (optTouch && (g_paused || game.mode() == M_PLAY || endPanel)) {     // cursor tactil
+                gcx += pad.ax * 320.f * dt; gcy += pad.ay * 320.f * dt;
+                if (gcx < 0) { gcx = 0; }
+                if (gcx > SCREEN_W) { gcx = SCREEN_W; }
+                if (gcy < 0) { gcy = 0; }
+                if (gcy > SCREEN_H) { gcy = SCREEN_H; }
+            }
+            if (g_paused) {                                              // menu de pausa
+                int h = hudHit(game, true, gcx, gcy);
+                if (pO || pStart) g_paused = false;
+                else if (pX) {
+                    if (h == 11) g_paused = false;
+                    else if (h == 12) { bool on = optMusic || optSfx; optMusic = optSfx = !on; sndPlay(SND_CLICK); }
+                    else if (h == 13) toMenu = true;
+                }
+                handled = true;
+            } else if (optTouch) {                                       // modo tactil: botones de la pantalla
+                float hx = gcx, hy = gcy; if (game.mode() == M_BUILD) game.cursor(hx, hy);
+                int h = hudHit(game, false, hx, hy);
+                if (pX && h) {
+                    cX = false;                                          // este X lo consume el boton
+                    if (h == 1) { g_paused = true; gcx = 100.f; gcy = 150.f; }
+                    else if (h == 2) { if (game.mode() == M_BUILD) { game.reset(); g_trash = false; } else cO = true; sndPlay(SND_CLICK); }   // reiniciar: limpia la construccion / vuelve a construir
+                    else if (h == 3) { g_trash = !g_trash; sndPlay(SND_CLICK); }
+                    else if (h == 4) cT = true;                          // tilde: arrancar
+                } else if (game.mode() == M_BUILD && g_trash && pX) {    // modo tacho: X sobre una casilla borra su pieza
+                    if (game.trayHit(hx, hy) >= 0) g_trash = false; else { cX = false; cS = true; }
+                }
+                if (pStart) { g_paused = true; gcx = 100.f; gcy = 150.f; }
+                if (endPanel) {                                          // cuadro de fin de nivel: filas clicables
+                    int row = endRowAt(game.mode() == M_WIN, gcx, gcy);
+                    cX = false;
+                    if (pX && row == 1) cX = true; else if (pX && row == 2) cO = true; else if (pX && row == 3) toMenu = true;
+                }
+            }
+            if (toMenu || (pT && endPanel) || (!optTouch && pStart)) {
+                if (game.isSandbox()) screen = S_WORLDS; else { selWorld = game.worldNow(); sel = Game::slotOf(game.levelIndex()); screen = S_SELECT; }
+                g_paused = false; handled = true;
+            }
+            else if (!handled && game.mode() == M_WIN && cX) {
                 int w = game.worldNow(), slot = Game::slotOf(game.levelIndex()) + 1, next = Game::levelAt(w, slot);
                 if (next >= 0 && game.loadLevel(next)) { sndPlay(SND_CLICK); }
                 else { selWorld = w; sel = slot < 15 ? slot : 14; screen = S_SELECT; msgTimer = 3.0f; keepMsg = true; }
@@ -757,18 +880,14 @@ int main(int, char**) {
                 if (pad.edge & PAD_R1) game.toggleFans();
                 if (pad.edge & PAD_L1) game.popOneBalloon();
             }
-            if (!handled && game.mode() == M_PLAY && optTouch) {          // modo tactil: cursor de la partida (stick izquierdo) y botones azules
-                gcx += pad.ax * 320.f * dt; gcy += pad.ay * 320.f * dt;
-                if (gcx < 0) { gcx = 0; }
-                if (gcx > SCREEN_W) { gcx = SCREEN_W; }
-                if (gcy < 0) { gcy = 0; }
-                if (gcy > SCREEN_H) { gcy = SCREEN_H; }
-                if (pX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); }
+            if (!handled && game.mode() == M_PLAY && optTouch) {          // modo tactil: botones azules de los dispositivos
+                if (cX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); }
             }
+            if (game.mode() != M_BUILD) g_trash = false;
             if (!handled) {
                 GameInput in;
                 in.stickX = pad.ax; in.stickY = pad.ay; in.lookX = pad.lx; in.lookY = pad.ly;
-                in.pressX = pX; in.pressSquare = pS; in.pressTriangle = pT; in.pressCircle = pO;
+                in.pressX = cX; in.pressSquare = cS; in.pressTriangle = cT; in.pressCircle = cO;
                 game.update(dt, in);
                 if (game.mode() == M_PLAY && !wasPlaying) { gcx = 320.f; gcy = 300.f; }
                 wasPlaying = (game.mode() == M_PLAY);
@@ -782,6 +901,7 @@ int main(int, char**) {
                 else if (ev & EV_CLICK) sndPlay(SND_CLICK);
             }
         }
+        if (screen != S_GAME) { g_paused = false; g_trash = false; }
         if (screen != prevScreen) { if (!keepMsg) msgTimer = 0.f; keepMsg = false; prevScreen = screen; }
         // musica segun la pantalla (como el juego original): menus = main, nivel = hai, victoria = final
         if (screen != S_GAME) musicWant(MUS_MAIN);
@@ -913,9 +1033,16 @@ int main(int, char**) {
                 spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);
-            if (optTouch && game.mode() == M_PLAY && (game.fanCount() > 0 || game.balloonsLeft() > 0)) {     // cursor de la partida
-                tri(gcx, gcy, gcx + 14, gcy + 6, gcx + 6, gcy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
-                tri(gcx + 1, gcy + 1, gcx + 11, gcy + 6, gcx + 6, gcy + 11, rgba(0x20, 0x20, 0x20, 0x80));
+            if (optTouch && !g_paused) { float hx = gcx, hy = gcy; if (game.mode() == M_BUILD) game.cursor(hx, hy); drawTouchHud(game, hx, hy); }
+            if (g_paused) drawPauseMenu(game);
+            {   // cursor: en construccion es el del juego; en el resto (modo tactil) el de la partida
+                float cx = gcx, cy = gcy; bool show = false;
+                if (game.mode() == M_BUILD && !g_paused) { game.cursor(cx, cy); show = true; }
+                else if (optTouch && (g_paused || game.mode() == M_PLAY || game.mode() == M_WIN || game.mode() == M_LOSE)) show = true;
+                if (show) {
+                    tri(cx, cy, cx + 14, cy + 6, cx + 6, cy + 14, rgba(0xFF, 0xFF, 0xFF, 0x80));
+                    tri(cx + 1, cy + 1, cx + 11, cy + 6, cx + 6, cy + 11, rgba(0x20, 0x20, 0x20, 0x80));
+                }
             }
         }
         if ((optCursor || optTouch) && screen != S_GAME) {   // cursor de los menus (siempre visible cuando los menus lo usan: modo tactil o la opcion del cursor)
