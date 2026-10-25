@@ -41,6 +41,8 @@ public:
     float vehicleMass() const;
     int  trayHit(float sx, float sy) const;    // tipo de pieza de la bandeja bajo ese punto (-1 si ninguno)
     bool pigPlaced() const;
+    void setViewer(bool on);                   // modo visor (lupa): muestra todo el nivel; solo al construir
+    bool viewer() const;
     float zoomNow() const;                     // zoom actual (2 en juego; menor al construir en el sandbox)
     bool fansOn() const;
     int  balloonsLeft() const;

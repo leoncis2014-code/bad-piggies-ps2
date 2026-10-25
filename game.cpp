@@ -50,7 +50,19 @@ public:
     int rows() const { return L->gridRows; }
     float lxOf(int c) const { return (float)c - (float)(cols() - 1) * 0.5f; }      // posicion de la celda respecto del centro de la rejilla (m)
     float lyOf(int r) const { return (float)r - (float)(rows() - 1) * 0.5f; }
+    bool viewerOn = false;                    // modo visor (lupa): se ve todo el nivel
+    float vz = 1.f, vcx = 0.f, vcy = 0.f;
+    void computeViewer() {
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+        for (int i = 0; i < L->npts; i++) { float x = L->pts[i][0], y = L->pts[i][1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        if (L->starX > -1e8f) { if (L->starX < x0) x0 = L->starX; if (L->starX > x1) x1 = L->starX; if (L->starY < y0) y0 = L->starY; }
+        if (L->goalY0 > -1e8f) { /* la meta ya esta dentro del terreno */ }
+        float w = x1 - x0, h = y1 - y0; if (w < 1.f) w = 1.f; if (h < 1.f) h = 1.f;
+        float zw = 590.f / w, zh = 330.f / h; vz = zw < zh ? zw : zh; if (vz > ZOOM) vz = ZOOM;
+        vcx = (x0 + x1) * 0.5f; vcy = (y0 + y1) * 0.5f + 14.f / vz;
+    }
     float zoom() const {                      // al construir se aleja lo necesario para que entre toda la rejilla
+        if (viewerOn) return vz;
         if (mode != M_BUILD) return ZOOM;
         float z = 420.f / ((float)cols() * CELL);       // deja lugar a los botones del costado
         return z < ZOOM ? z : ZOOM;
@@ -61,11 +73,12 @@ public:
     float cellY(int row) const { return L->gridYB - (rows() - 1 - row) * CELL; }
 
     void toScreen(float wx, float wy, float& sx, float& sy) const {
-        sx = (wx - camx) * zoom() + SCREEN_W * 0.5f;
-        sy = (wy - camy) * zoom() + SCREEN_H * 0.5f;
+        sx = (wx - (viewerOn ? vcx : camx)) * zoom() + SCREEN_W * 0.5f;
+        sy = (wy - (viewerOn ? vcy : camy)) * zoom() + SCREEN_H * 0.5f;
     }
 
     void reset(bool full) {
+        viewerOn = false;
         delete world; world = nullptr; chassis = nullptr; nwheels = 0;
         if (full) {
             for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { cells[r][c] = -1; pig[r][c] = false; rot[r][c] = 0; }
@@ -381,7 +394,9 @@ void Game::update(float dt, const GameInput& in) { g->update(dt, in); }
 int Game::drawList(DrawItem* out, int max) const { return g->draw(out, max); }
 Mode Game::mode() const { return g->mode; }
 void Game::cursor(float& x, float& y) const { x = g->cx; y = g->cy; }
-void Game::camera(float& x, float& y) const { x = g->camx; y = g->camy; }
+void Game::camera(float& x, float& y) const { x = g->viewerOn ? g->vcx : g->camx; y = g->viewerOn ? g->vcy : g->camy; }
+void Game::setViewer(bool on) { if (on && g->mode != M_BUILD) return; g->viewerOn = on; if (on) g->computeViewer(); }
+bool Game::viewer() const { return g->viewerOn; }
 int Game::selected() const { return g->sel; }
 int Game::remaining(int t) const { return g->left[t]; }
 bool Game::cellPiece(int col, int row, int& type) const { type = g->cells[row][col]; return type >= 0; }
