@@ -25,6 +25,9 @@ extern "C" {
 extern unsigned char decor_raw[]; extern unsigned int size_decor_raw;
 extern unsigned char terrain1_raw[]; extern unsigned int size_terrain1_raw;
 extern unsigned char terrain2_raw[]; extern unsigned int size_terrain2_raw;
+extern unsigned char terrain3_raw[]; extern unsigned int size_terrain3_raw;
+extern unsigned char terrain4_raw[]; extern unsigned int size_terrain4_raw;
+extern unsigned char terrain5_raw[]; extern unsigned int size_terrain5_raw;
 extern unsigned char icon_sys[]; extern unsigned int size_icon_sys;
 extern unsigned char icon_ico[]; extern unsigned int size_icon_ico;
 extern unsigned char screen_title[]; extern unsigned int size_screen_title;
@@ -124,7 +127,7 @@ static const float FONT_K = 24.f / 22.f;   // el atlas es de 22 px; esto mantien
 static int slotOwner = -1;   // que hay en la textura compartida de 512 KB: 0..2 = pantallas, 10+n = terreno del nivel n
 static GSTEXTURE texDecor[DEC_COUNT];
 static GSTEXTURE texTerr;                             // terreno del nivel actual (comparte la memoria de video con las imagenes de los menus)
-static const unsigned char* const TERRAIN_RAW[3] = { terrain1_raw, terrain2_raw, NULL };   // por indice de nivel (el sandbox no usa textura)
+static const unsigned char* const TERRAIN_RAW[6] = { terrain1_raw, terrain2_raw, terrain3_raw, terrain4_raw, terrain5_raw, NULL };   // por indice de nivel (el sandbox no usa textura)
 static char padBuf[256] __attribute__((aligned(64)));
 static float kx = 1.f, ky = 1.f;   // pantalla virtual 640x448 -> pantalla real
 
@@ -177,7 +180,7 @@ static void sprite(GSTEXTURE& t, float cx, float cy, float w, float h, float ang
     gsKit_prim_triangle_texture(gs, &t, X[1], Y[1], tw, 0, X[3], Y[3], tw, th, X[2], Y[2], 0, th, 1, col);
 }
 static GSTEXTURE& texOf(int type) {
-    switch (type) { case P_PIG: return texPig; case P_BOX: return texBox; case P_WHEEL: return texWheel; case P_FAN: return texDecor[DEC_FAN]; default: return texDecor[DEC_BALLOON]; }
+    switch (type) { case P_PIG: return texPig; case P_BOX: return texBox; case P_WHEEL: return texWheel; case P_FAN: return texDecor[DEC_FAN]; case P_BLOWER: return texDecor[DEC_BLOWER]; case P_BALLOON2: return texDecor[DEC_BALLOON2]; default: return texDecor[DEC_BALLOON]; }
 }
 static void spriteOf(int type, float cx, float cy, float scale, float ang) {
     GSTEXTURE& t = texOf(type);
@@ -357,8 +360,9 @@ static void drawFloppy(float cx, float cy, bool hot) {      // icono de disquete
     if (hot) frameRect(cx - 27, cy - 27, cx + 27, cy + 27, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
 }
 // botones azules de la partida (como en el juego original): uno por tipo de pieza activable
-static int playButtons(const Game& g, float xs[2], int ty[2]) {    // ty: 0 = ventilador, 1 = globo
+static int playButtons(const Game& g, float xs[3], int ty[3]) {    // ty: 0 = ventilador, 1 = globo, 2 = soplador
     int n = 0;
+    if (g.blowersLeft() > 0) ty[n++] = 2;
     if (g.fanCount() > 0) ty[n++] = 0;
     if (g.balloonsLeft() > 0) ty[n++] = 1;
     for (int i = 0; i < n; i++) xs[i] = 320.f + ((float)i - (float)(n - 1) * 0.5f) * 80.f;
@@ -366,12 +370,12 @@ static int playButtons(const Game& g, float xs[2], int ty[2]) {    // ty: 0 = ve
 }
 static const float PLAY_BTN_Y = 366.f;
 static int playButtonAt(const Game& g, float x, float y) {
-    float xs[2]; int ty[2]; int n = playButtons(g, xs, ty);
+    float xs[3]; int ty[3]; int n = playButtons(g, xs, ty);
     for (int i = 0; i < n; i++) { float dx = x - xs[i], dy = y - PLAY_BTN_Y; if (dx * dx + dy * dy < 32.f * 32.f) return ty[i]; }
     return -1;
 }
 static void drawPlayButtons(const Game& g) {
-    float xs[2]; int ty[2]; int n = playButtons(g, xs, ty);
+    float xs[3]; int ty[3]; int n = playButtons(g, xs, ty);
     int over = playButtonAt(g, gcx, gcy);
     for (int i = 0; i < n; i++) {
         float cx = xs[i], cy = PLAY_BTN_Y;
@@ -379,6 +383,7 @@ static void drawPlayButtons(const Game& g) {
         disc(cx, cy, 28.f, rgba(0x2F, 0x84, 0xDE, 0x80));
         ring(cx, cy, 28.f, 4.f, on ? rgba(0x60, 0xE8, 0x60, 0x80) : rgba(0xB8, 0xE0, 0xFF, 0x80));
         if (ty[i] == 0) sprite(texDecor[DEC_FAN], cx, cy, texDecor[DEC_FAN].Width * 0.62f, texDecor[DEC_FAN].Height * 0.62f, 0.f);
+        else if (ty[i] == 2) sprite(texDecor[DEC_BLOWER], cx, cy, texDecor[DEC_BLOWER].Width * 0.8f, texDecor[DEC_BLOWER].Height * 0.8f, 0.f);
         else sprite(texDecor[DEC_BALLOON], cx, cy - 1, texDecor[DEC_BALLOON].Width * 0.72f, texDecor[DEC_BALLOON].Height * 0.72f, 0.f);
         if (ty[i] == 1 && g.balloonsLeft() > 1) { char b[8]; snprintf(b, sizeof(b), "x%d", g.balloonsLeft()); textLeft(cx + 14, cy + 12, b, 0.6f, 255, 255, 255); }
         if (over == ty[i]) ring(cx, cy, 34.f, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
@@ -657,15 +662,16 @@ static void drawGameUI(const Game& g) {
         }
         if (!g.viewer()) textCentered(false, 320, 412, optTouch ? "X: poner   Tacho: borrar   Tilde: iniciar   START: pausa" : "X: poner  Cuadrado: quitar  Triángulo: iniciar  SELECT: ideas  L2: visor", 0.62f, 255, 255, 255);   // el cursor se dibuja al final, encima de los botones
     } else if (g.mode() == M_PLAY) {
-        if (optTouch && (g.fanCount() > 0 || g.balloonsLeft() > 0)) drawPlayButtons(g);
-        if (g.fanCount() > 0 || g.balloonsLeft() > 0) textCentered(false, 320, 408, optTouch ? "Cursor + X sobre los botones azules   Círculo: construir" : "R1: ventilador   L1: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
+        const bool anyDev = g.fanCount() > 0 || g.balloonsLeft() > 0 || g.blowerCount() > 0;
+        if (optTouch && anyDev) drawPlayButtons(g);
+        if (anyDev) textCentered(false, 320, 408, optTouch ? "Cursor + X sobre los botones azules   Círculo: construir" : "R1: ventilador   R2: soplador   L1: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
         else if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir   Stick derecho: cámara", 0.62f, 255, 255, 255);
         if (g.isSandbox()) {
             char b2[48];
             if (g.fanCount() > 0) textLeft(30, 48, g.fansOn() ? "Ventilador: ENCENDIDO" : "Ventilador: APAGADO", 0.75f, g.fansOn() ? 150 : 255, g.fansOn() ? 255 : 150, 150);
             if (g.balloonsLeft() > 0) { snprintf(b2, sizeof(b2), "Globos: %d", g.balloonsLeft()); textLeft(30, 72, b2, 0.75f, 255, 200, 200); }
         }
-        else if (g.time() < 5.f && g.fanCount() == 0 && g.balloonsLeft() == 0) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
+        else if (g.time() < 5.f && !anyDev) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
     } else if (g.mode() == M_WIN) {
         rect(100, 60, 540, 396, rgba(0x10, 0x20, 0x30, 0x60));
         frameRect(100, 60, 540, 396, 3.f, rgba(0x40, 0xD0, 0x40, 0x80));
@@ -944,9 +950,10 @@ int main(int, char**) {
             if (!handled && game.mode() == M_PLAY && !optTouch) {         // modo fisico: R1 enciende/apaga el ventilador, L1 pincha un globo
                 if (pad.edge & PAD_R1) game.toggleFans();
                 if (pad.edge & PAD_L1) game.popOneBalloon();
+                if (pad.edge & PAD_R2) game.fireBlowers();
             }
             if (!handled && game.mode() == M_PLAY && optTouch) {          // modo tactil: botones azules de los dispositivos
-                if (cX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); }
+                if (cX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); else if (b == 2) game.fireBlowers(); }
             }
             if (game.mode() != M_BUILD) g_trash = false;
             if (!handled) {
@@ -1095,6 +1102,7 @@ int main(int, char**) {
             for (int i = 0; i < n; i++) {
                 float sx, sy; worldToScreen(game, items[i].x, items[i].y, sx, sy);
                 if (items[i].type == P_FAN) { float cs = 31.f * game.zoomNow() * 0.98f; sprite(texDecor[DEC_FAN], sx, sy, cs, cs, items[i].angle); continue; }
+                if (items[i].type == P_BLOWER) { float k = 31.f * game.zoomNow() * 0.98f / (float)texDecor[DEC_BLOWER].Height; sprite(texDecor[DEC_BLOWER], sx, sy, texDecor[DEC_BLOWER].Width * k, texDecor[DEC_BLOWER].Height * k, items[i].angle); continue; }
                 spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);

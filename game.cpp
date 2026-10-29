@@ -40,6 +40,10 @@ public:
     std::vector<Seg> segs;                    // aristas del terreno: los globos revientan al tocarlo
     static constexpr float FAN_N = 6.0f;      // empuje de cada ventilador (newtons): no depende del tamano del vehiculo
     bool popped[MAXR][MAXC];
+    int balN[MAXR][MAXC];                                      // globos que le quedan a cada objeto de globos (1 o 2)
+    static bool isBal(int tp) { return tp == P_BALLOON || tp == P_BALLOON2; }
+    bool blowUsed[MAXR][MAXC]; float blowT[MAXR][MAXC];       // sopladores: ya usado / segundos de soplido que quedan
+    static constexpr float BLOW_J = 9.0f, BLOW_DUR = 0.30f;   // impulso total (N*s) repartido durante BLOW_DUR segundos
     b2Fixture* thrFx[MAXR][MAXC];
     int wheelCell[MAXR*MAXC][2];
 
@@ -88,7 +92,7 @@ public:
         mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0; starGot = false; resStars = 0; finalT = 0;
         camx = gx(); camy = gy() - 10.f;
         fansOn = false;                       // los ventiladores arrancan apagados: se encienden con su boton
-        for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { popped[r][c] = false; thrFx[r][c] = nullptr; }
+        for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { popped[r][c] = false; thrFx[r][c] = nullptr; balN[r][c] = 0; blowUsed[r][c] = false; blowT[r][c] = 0.f; }
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
 
@@ -176,10 +180,10 @@ public:
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             int tp = cells[r][c];
             float lx = lxOf(c), ly = lyOf(r);
-            if (tp == P_FAN || tp == P_BALLOON) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
+            if (tp == P_FAN || isBal(tp) || tp == P_BLOWER) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
                 b2PolygonShape fs; fs.SetAsBox(0.36f, 0.36f, b2Vec2(lx, ly), 0.f);
                 b2FixtureDef ff; ff.shape = &fs; ff.density = 0.35f; ff.friction = 0.3f; ff.restitution = 0.1f;
-                if (tp == P_BALLOON) { ff.isSensor = true; ff.density = 0.2f; }       // el globo no es solido: no choca ni estorba
+                if (isBal(tp)) { ff.isSensor = true; ff.density = 0.2f; balN[r][c] = (tp == P_BALLOON2) ? 2 : 1; }       // el globo no es solido: no choca ni estorba
                 thrFx[r][c] = chassis->CreateFixture(&ff);
                 continue;
             }
@@ -221,18 +225,19 @@ public:
         for (int i = 0; i < nwheels; i++) totalMass += wheels[i]->GetMass();
         if (totalMass < 0.5f) totalMass = 0.5f;
         // arranque: solo con 2 o mas ruedas el vehiculo sale rodando; sin ruedas se queda parado y pierdes
-        if (nwheels >= 2) {
-            b2Vec2 kick(3.5f, 0.f);
+        if (nwheels >= 2 && L->kick > 0.f) {
+            b2Vec2 kick(L->kick, 0.f);
             chassis->SetLinearVelocity(kick);
             for (int i = 0; i < nwheels; i++) wheels[i]->SetLinearVelocity(kick);
         }
         mode = M_PLAY; t = 0; stuck = 0; events |= EV_GO;
     }
 
-    void popBalloon() {
+    void popBalloon() {                                          // revienta UN globo: un objeto de 2 globos necesita 2 toques
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++)
-            if (cells[r][c] == P_BALLOON && !popped[r][c] && thrFx[r][c]) {
-                popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; events |= EV_PLACE; return;
+            if (isBal(cells[r][c]) && balN[r][c] > 0 && thrFx[r][c]) {
+                if (--balN[r][c] <= 0) { popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; }
+                events |= EV_PLACE; return;
             }
     }
     b2Vec2 pigWorld() const {
@@ -251,7 +256,7 @@ public:
                 int ti = trayAt(cx, cy);
                 if (ti >= 0) { sel = ti; events |= EV_CLICK; }
                 else if (cellAt(cx, cy, col, row)) {
-                    if (sel == P_FAN && cells[row][col] == P_FAN) { rot[row][col] = (unsigned char)((rot[row][col] + 1) & 3); events |= EV_CLICK; }   // X sobre un ventilador: lo gira
+                    if ((sel == P_FAN || sel == P_BLOWER) && cells[row][col] == sel) { rot[row][col] = (unsigned char)((rot[row][col] + 1) & 3); events |= EV_CLICK; }   // X sobre un ventilador: lo gira
                     else if (left[sel] > 0) {
                         if (canPlace(sel, row, col)) {
                             if (sel == P_PIG) pig[row][col] = true; else { cells[row][col] = sel; rot[row][col] = 0; }
@@ -274,16 +279,16 @@ public:
         int nthr = 0;
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             int tp = cells[r][c];
-            if (tp != P_FAN && tp != P_BALLOON) continue;
-            if (tp == P_BALLOON && popped[r][c]) continue;
+            if (tp != P_FAN && !isBal(tp)) continue;
+            if (isBal(tp) && balN[r][c] <= 0) continue;
             nthr++;
             if (tp == P_FAN && !fansOn) continue;
             if (tp == P_FAN) { float a = chassis->GetAngle() + (float)rot[r][c] * 1.5707963f; chassis->ApplyForceToCenter(FAN_N * b2Vec2(cosf(a), sinf(a)), true); }   // empuje fijo en la direccion del ventilador
-            else chassis->ApplyForceToCenter(b2Vec2(0.f, -L->balloonLift), true);                                                                          // cada globo levanta una fuerza fija (no una parte del peso)
+            else chassis->ApplyForceToCenter(b2Vec2(0.f, -L->balloonLift * (float)balN[r][c]), true);                                                                          // cada globo levanta una fuerza fija (no una parte del peso)
         }
         // un globo revienta al tocar el terreno
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
-            if (cells[r][c] != P_BALLOON || popped[r][c]) continue;
+            if (!isBal(cells[r][c]) || balN[r][c] <= 0) continue;
             b2Vec2 bc = chassis->GetWorldPoint(b2Vec2(lxOf(c), lyOf(r)));
             const float rr = 0.40f; bool hit = false;
             for (size_t k = 0; k < segs.size() && !hit; k++) {
@@ -294,7 +299,13 @@ public:
                 float px = sg.x1 + t * dx - bc.x, py = sg.y1 + t * dy - bc.y;
                 if (px * px + py * py < rr * rr) hit = true;
             }
-            if (hit && thrFx[r][c]) { popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; events |= EV_PLACE; }
+            if (hit && thrFx[r][c]) { balN[r][c] = 0; popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; events |= EV_PLACE; }
+        }
+        for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {          // sopladores: empujon unico repartido en un instante corto
+            if (cells[r][c] != P_BLOWER || blowT[r][c] <= 0.f) continue;
+            float a = chassis->GetAngle() + (float)rot[r][c] * 1.5707963f;
+            chassis->ApplyForceToCenter((BLOW_J / BLOW_DUR) * b2Vec2(cosf(a), sinf(a)), true);
+            blowT[r][c] -= dt;
         }
         chassis->SetLinearDamping(nthr > 0 ? 0.25f : 0.f);
         world->Step(dt, 8, 3);
@@ -312,9 +323,12 @@ public:
             float sx = L->starX / PPM, sy = L->starY / PPM, rr = 0.95f;
             bool hit = (chassis->GetPosition() - b2Vec2(sx, sy)).Length() < rr;
             for (int i = 0; i < nwheels && !hit; i++) hit = (wheels[i]->GetPosition() - b2Vec2(sx, sy)).Length() < rr;
+            for (int r = 0; r < rows() && !hit; r++) for (int c = 0; c < cols() && !hit; c++)       // cualquier pieza del vehiculo (globos, sopladores...) la recoge al tocarla
+                if (cells[r][c] >= 0 || pig[r][c]) hit = (chassis->GetWorldPoint(b2Vec2(lxOf(c), lyOf(r))) - b2Vec2(sx, sy)).Length() < rr;
             if (hit) { starGot = true; events |= EV_STAR; }
         }
-        if (px >= L->goalX && py >= L->goalY0 && py <= L->goalY1) {
+        bool atGoal = (L->flags & 2) ? (fabsf(px - L->goalX) < 24.f) : (px >= L->goalX);      // flags&2: la meta se toca desde cualquier lado
+        if (atGoal && py >= L->goalY0 && py <= L->goalY1) {
             mode = M_WIN; events |= EV_WIN; finalT = t;
             resStars = 1 + (starGot ? 1 : 0) + ((L->parTime > 0.f && t <= L->parTime) ? 1 : 0);
             return;
@@ -343,11 +357,11 @@ public:
                     if (tp < 0) continue;
                     if (playing) {
                         if (tp == P_WHEEL) continue;                  // las ruedas se dibujan aparte
-                        if (tp == P_BALLOON && popped[r][c]) continue;  // globo pinchado
+                        if (isBal(tp) && popped[r][c]) continue;  // globo pinchado
                         b2Vec2 w = chassis->GetWorldPoint(b2Vec2(lx, ly));
-                        out[n].type = tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle() + (tp == P_FAN ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
+                        out[n].type = (tp == P_BALLOON2 && balN[r][c] == 1) ? P_BALLOON : tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle() + ((tp == P_FAN || tp == P_BLOWER) ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
                     } else {
-                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + (tp == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = (tp == P_FAN ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
+                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + (tp == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = ((tp == P_FAN || tp == P_BLOWER) ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
                     }
                 } else if (pig[r][c]) {
                     if (playing) {
@@ -374,6 +388,10 @@ int Game::levelCount(int world) { int n = 0; for (int i = 0; i < NUM_LEVELS_DATA
 int Game::levelAt(int world, int slot) { int n = 0; for (int i = 0; i < NUM_LEVELS_DATA; i++) if (LEVELS[i].world == world && !(LEVELS[i].flags & 1)) { if (n == slot) return i; n++; } return -1; }
 int Game::slotOf(int levelIndex) { int n = 0; for (int i = 0; i < levelIndex; i++) if (LEVELS[i].world == LEVELS[levelIndex].world && !(LEVELS[i].flags & 1)) n++; return n; }
 int Game::worldNow() const { return g->L->world; }
+void Game::fireBlowers() { if (g->mode != M_PLAY) return; bool any = false; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BLOWER && !g->blowUsed[r][c]) { g->blowUsed[r][c] = true; g->blowT[r][c] = GameImpl::BLOW_DUR; any = true; } if (any) g->events |= EV_GO; }
+int Game::blowerCount() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BLOWER) n++; return n; }
+int Game::blowersLeft() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BLOWER && !g->blowUsed[r][c]) n++; return n; }
+bool Game::blowerActive(int col, int row) const { return col >= 0 && row >= 0 && col < MAXC && row < MAXR && g->blowT[row][col] > 0.f; }
 void Game::toggleFans() { if (g->mode == M_PLAY) { g->fansOn = !g->fansOn; g->events |= EV_CLICK; } }
 void Game::popOneBalloon() { if (g->mode == M_PLAY) g->popBalloon(); }
 int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }
@@ -385,7 +403,7 @@ float Game::zoomNow() const { return g->zoom(); }
 int Game::gridCols() const { return g->cols(); }
 int Game::gridRows() const { return g->rows(); }
 bool Game::fansOn() const { return g->fansOn; }
-int Game::balloonsLeft() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BALLOON && !g->popped[r][c]) n++; return n; }
+int Game::balloonsLeft() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (GameImpl::isBal(g->cells[r][c])) n += g->balN[r][c]; return n; }
 int Game::fanCount() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_FAN) n++; return n; }
 bool Game::isSandbox() const { return (g->L->flags & 1) != 0; }
 const LevelData& Game::levelData() const { return *g->L; }

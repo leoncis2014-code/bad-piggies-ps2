@@ -1,6 +1,6 @@
 // Generado por tools/gen_decor.py
 #pragma once
-enum { DEC_TUFT0, DEC_TUFT1, DEC_TUFT2, DEC_TUFT3, DEC_FLOWER0, DEC_FLOWER1, DEC_SHELL, DEC_STAR, DEC_LOG, DEC_BUSH, DEC_STARBOX, DEC_GOLDSTAR, DEC_FAN, DEC_BALLOON, DEC_COUNT };
+enum { DEC_TUFT0, DEC_TUFT1, DEC_TUFT2, DEC_TUFT3, DEC_FLOWER0, DEC_FLOWER1, DEC_SHELL, DEC_STAR, DEC_LOG, DEC_BUSH, DEC_STARBOX, DEC_GOLDSTAR, DEC_FAN, DEC_BALLOON, DEC_BLOWER, DEC_BALLOON2, DEC_COUNT };
 typedef struct { int w, h, offset; } DecorTex;   // offset en bytes dentro de decor.raw
 static const DecorTex DECOR_TEX[DEC_COUNT] = {
   { 55, 36, 0 },
@@ -16,5 +16,7 @@ static const DecorTex DECOR_TEX[DEC_COUNT] = {
   { 86, 85, 188068 },
   { 47, 45, 217308 },
   { 37, 66, 225768 },
-  { 49, 54, 235536 }
+  { 49, 54, 235536 },
+  { 62, 57, 246120 },
+  { 70, 56, 260256 }
 };

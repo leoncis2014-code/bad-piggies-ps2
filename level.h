@@ -26,8 +26,10 @@ struct LevelData {
     float parTime;                     // tercera estrella: terminar en este tiempo o menos (s); 0 = sin
     int world;                         // 0 = Ground Hog Day, 1 = When Pigs Fly, 3 = Sandbox
     int gridCols, gridRows;            // rejilla de construccion
-    int pieces[5];                     // piezas disponibles: cerdito, caja, rueda, ventilador, globo
+    int pieces[10];                    // piezas disponibles segun PieceType: cerdito, caja, rueda, ventilador, globo, soplador, ...
+
     float balloonLift;                 // cuanto levanta un globo (multiplo del peso del vehiculo)
     float goalY0, goalY1;              // la meta solo vale si el cerdito esta entre estas alturas
     int flags;                         // bit0: sandbox (piezas ilimitadas, sin meta ni derrota); texW = 0: terreno liso sin textura
+    float kick;                        // empujon inicial hacia adelante (m/s) al arrancar con 2 o mas ruedas (0 = sin empujon)
 };
