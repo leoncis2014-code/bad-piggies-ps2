@@ -322,6 +322,8 @@ static void ring(float cx, float cy, float r, float th, u64 col) {
 // que elemento de un menu hay bajo el cursor (-1 = ninguno)
 static int hitTest(Screen sc, float x, float y) {
     if (sc == S_TITLE) {
+        float rvx = x - 336.f, rvy = y - 388.f;
+        if (rvx * rvx + rvy * rvy < 26.f * 26.f) return 3;                                          // boton "Rovio" del dibujo original
         float fx = x - 40.f, fy = y - 330.f;
         if (fx * fx + fy * fy < 30.f * 30.f) return 2;
         float dx = x - 335.f, dy = y - 234.f;
@@ -380,17 +382,16 @@ static void drawPlayButtons(const Game& g) {
     for (int i = 0; i < n; i++) {
         float cx = xs[i], cy = PLAY_BTN_Y;
         bool on = (ty[i] == 0) && g.fansOn();
-        disc(cx, cy, 28.f, rgba(0x2F, 0x84, 0xDE, 0x80));
-        ring(cx, cy, 28.f, 4.f, on ? rgba(0x60, 0xE8, 0x60, 0x80) : rgba(0xB8, 0xE0, 0xFF, 0x80));
-        if (ty[i] == 0) sprite(texDecor[DEC_FAN], cx, cy, texDecor[DEC_FAN].Width * 0.62f, texDecor[DEC_FAN].Height * 0.62f, 0.f);
-        else if (ty[i] == 2) sprite(texDecor[DEC_BLOWER], cx, cy, texDecor[DEC_BLOWER].Width * 0.8f, texDecor[DEC_BLOWER].Height * 0.8f, 0.f);
-        else sprite(texDecor[DEC_BALLOON], cx, cy - 1, texDecor[DEC_BALLOON].Width * 0.72f, texDecor[DEC_BALLOON].Height * 0.72f, 0.f);
-        if (ty[i] == 1 && g.balloonsLeft() > 1) { char b[8]; snprintf(b, sizeof(b), "x%d", g.balloonsLeft()); textLeft(cx + 14, cy + 12, b, 0.6f, 255, 255, 255); }
-        if (over == ty[i]) ring(cx, cy, 34.f, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+        float k = (over == ty[i]) ? 1.18f : 1.f;                                   // al apuntarlo, el boton se agranda
+        sprite(texDecor[DEC_BTN], cx, cy, 62.f * k, 61.f * k, 0.f, on ? rgba(0x60, 0xE8, 0x60, 0x80) : 0);
+        int gi = ty[i] == 0 ? DEC_GFAN : (ty[i] == 2 ? DEC_GBLOWER : DEC_GBALLOON);
+        sprite(texDecor[gi], cx, cy - 1, texDecor[gi].Width * 0.62f * k, texDecor[gi].Height * 0.62f * k, 0.f);
+        if (ty[i] == 1 && g.balloonsLeft() > 1) { char b[8]; snprintf(b, sizeof(b), "x%d", g.balloonsLeft()); textLeft(cx + 16 * k, cy + 12 * k, b, 0.6f, 255, 255, 255); }
     }
 }
 
 // ---------------------------------------------------------------- interfaz tactil (como el juego original)
+static bool loadLvl(Game& g, int i) { bool ok = g.loadLevel(i); if (ok) g.startIntro(); return ok; }       // cargar un nivel con la animacion de inicio
 static bool g_paused = false, g_trash = false, g_idea = false;        // menu de pausa abierto / modo tacho (X sobre una casilla borra)
 static void thickLine(float x1, float y1, float x2, float y2, float th, u64 col) {
     float dx = x2 - x1, dy = y2 - y1, l = sqrtf(dx * dx + dy * dy); if (l < 0.01f) return;
@@ -511,13 +512,27 @@ static void drawIdeaPopup(const Game& g) {
     thickLine(523, 53, 537, 67, 4.f, rgba(0xFF, 0xFF, 0xFF, 0x80)); thickLine(537, 53, 523, 67, 4.f, rgba(0xFF, 0xFF, 0xFF, 0x80));
 }
 // filas del cuadro de fin de nivel: victoria 1 siguiente / 2 repetir / 3 elegir nivel; derrota 2 repetir / 3 elegir nivel
+static const float WIN_BTN_X[3] = { 386.f, 320.f, 262.f }, WIN_BTN_R[3] = { 34.f, 30.f, 28.f }, WIN_BTN_Y = 372.f;   // siguiente, repetir, elegir nivel
 static int endRowAt(bool win, float x, float y) {
+    if (win) {
+        for (int i = 0; i < 3; i++) { float dx = x - WIN_BTN_X[i], dy = y - WIN_BTN_Y; if (dx * dx + dy * dy < WIN_BTN_R[i] * WIN_BTN_R[i]) return i + 1; }
+        return 0;
+    }
     if (x < 150 || x > 490) return 0;
-    if (win) { if (y >= 288 && y < 320) return 1; if (y >= 320 && y < 352) return 2; if (y >= 352 && y < 384) return 3; }
-    else { if (y >= 211 && y < 249) return 2; if (y >= 256 && y < 294) return 3; }
+    if (y >= 211 && y < 249) return 2;
+    if (y >= 256 && y < 294) return 3;
     return 0;
 }
-
+static void winBtn(int i) {                                     // boton redondo verde de la pantalla de victoria
+    bool hot = optTouch && endRowAt(true, gcx, gcy) == i + 1;
+    float r = WIN_BTN_R[i] * (hot ? 1.15f : 1.f), cx = WIN_BTN_X[i], cy = WIN_BTN_Y;
+    disc(cx, cy, r, rgba(0x7C, 0xCB, 0x2A, 0x80));
+    ring(cx, cy, r, 3.5f, rgba(0xE8, 0xFF, 0xB0, 0x80));
+    u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80);
+    if (i == 0) { tri(cx - r * 0.45f, cy - r * 0.5f, cx - r * 0.45f, cy + r * 0.5f, cx + r * 0.05f, cy, w); tri(cx + r * 0.05f, cy - r * 0.5f, cx + r * 0.05f, cy + r * 0.5f, cx + r * 0.55f, cy, w); }   // siguiente: dos triangulos
+    else if (i == 1) { ring(cx, cy, r * 0.5f, 4.5f, w); tri(cx + r * 0.1f, cy - r * 0.78f, cx + r * 0.1f, cy - r * 0.2f, cx + r * 0.5f, cy - r * 0.49f, w); }   // repetir: flecha circular
+    else { for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) rect(cx - r * 0.5f + a * r * 0.38f, cy - r * 0.5f + b * r * 0.38f, cx - r * 0.5f + a * r * 0.38f + r * 0.26f, cy - r * 0.5f + b * r * 0.38f + r * 0.26f, w); }   // niveles: 9 cuadritos
+}
 // ---------------------------------------------------------------- pantallas originales
 static void screenInit() {
     memset(&texScreen, 0, sizeof(texScreen));
@@ -554,6 +569,24 @@ static void screenDraw(int idx) {            // la imagen es 640x400: va centrad
     gs->PrimAlphaEnable = GS_SETTING_ON;
 }
 
+// agrandar un trozo de la imagen del menu cuando el cursor lo apunta (como el juego original)
+static void screenZoomRect(float x0, float y0, float x1, float y1, float k) {
+    float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f, hw = (x1 - x0) * 0.5f * k, hh = (y1 - y0) * 0.5f * k;
+    gs->PrimAlphaEnable = GS_SETTING_OFF;
+    quadUV(texScreen, cx - hw, cy - hh, cx + hw, cy + hh, x0, y0 - 24, x1, y1 - 24, rgba(0x80, 0x80, 0x80, 0x80));
+    gs->PrimAlphaEnable = GS_SETTING_ON;
+}
+static void screenZoomDisc(float cx, float cy, float r, float k) {       // boton redondo: abanico de triangulos con la misma imagen
+    const int N = 28; u64 col = rgba(0x80, 0x80, 0x80, 0x80);
+    gs->PrimAlphaEnable = GS_SETTING_OFF;
+    for (int i = 0; i < N; i++) {
+        float a0 = i * 6.2831853f / N, a1 = (i + 1) * 6.2831853f / N;
+        float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+        gsKit_prim_triangle_texture(gs, &texScreen, cx * kx, cy * ky, cx, cy - 24, (cx + c0 * r * k) * kx, (cy + s0 * r * k) * ky, cx + c0 * r, cy - 24 + s0 * r, (cx + c1 * r * k) * kx, (cy + s1 * r * k) * ky, cx + c1 * r, cy - 24 + s1 * r, 1, col);
+    }
+    gs->PrimAlphaEnable = GS_SETTING_ON;
+}
+
 // ---------------------------------------------------------------- dibujo del juego
 static void worldToScreen(const Game& g, float wx, float wy, float& sx, float& sy) {
     float cx, cy; g.camera(cx, cy);
@@ -575,6 +608,31 @@ static void drawDecor(const Game& g, int layer) {
     }
 }
 
+// arena, espuma y mar debajo del nivel, con olas que se mueven (como el fondo del juego original)
+static void drawSea(const Game& g) {
+    const LevelData& L = g.levelData();
+    if (L.flags & 1) return;                                   // el sandbox tiene su propio fondo
+    int nr = L.ringStart[L.nrings]; float maxY = -1e9f;
+    for (int i = 0; i < nr; i++) if (L.pts[i][1] > maxY) maxY = L.pts[i][1];
+    float sx, sy; worldToScreen(g, 0.f, maxY - 4.f, sx, sy);
+    float z = g.zoomNow();
+    if (sy > SCREEN_H) return;
+    float sand0 = sy, sand1 = sy + 34.f * z, foam = sy + 44.f * z;
+    auto clampY = [](float y) { return y < 0.f ? 0.f : (y > SCREEN_H ? SCREEN_H : y); };
+    rect(0, clampY(sand0), SCREEN_W, clampY(sand1), rgba(0xA9, 0xB6, 0x62, 0x80));                 // arena
+    rect(0, clampY(sand1), SCREEN_W, clampY(foam), rgba(0x9C, 0x94, 0x40, 0x80));                  // arena mojada
+    rect(0, clampY(foam), SCREEN_W, SCREEN_H, rgba(0x63, 0xCD, 0xBE, 0x80));                       // mar
+    rect(0, clampY(foam + 40.f * z), SCREEN_W, SCREEN_H, rgba(0x3C, 0xAF, 0xA0, 0x80));            // mar mas profundo
+    for (int x = 0; x < (int)SCREEN_W; x += 16) {                                                  // espuma que va y viene
+        float w0 = sinf((x + g_clock * 70.f) * 0.045f) * 4.f + sinf((x - g_clock * 40.f) * 0.11f) * 2.f;
+        float y0 = foam + w0 * z * 0.6f;
+        rect((float)x, clampY(y0 - 7.f * z * 0.6f), (float)x + 17.f, clampY(y0 + 3.f * z * 0.6f), rgba(0xFF, 0xFF, 0xFF, 0x80));
+    }
+    for (int x = 0; x < (int)SCREEN_W; x += 24) {                                                  // segunda ola mas abajo
+        float y1 = foam + 26.f * z * 0.6f + sinf((x - g_clock * 55.f) * 0.06f) * 3.f * z * 0.6f;
+        rect((float)x, clampY(y1), (float)x + 25.f, clampY(y1 + 3.f * z * 0.6f), rgba(0xD8, 0xF6, 0xF0, 0x70));
+    }
+}
 static void drawTerrain(const Game& g) {
     const LevelData& L = g.levelData();
     bool textured = L.texW > 0;
@@ -635,7 +693,7 @@ static void endRowDraw(float ytop, float h, const char* text, float scale, int c
 }
 static void drawGameUI(const Game& g) {
     char buf[64];
-    if (g.mode() == M_BUILD) {
+    if (g.mode() == M_BUILD && !g.introActive()) {
         u64 cellc = rgba(0xFF, 0xFF, 0xFF, 0x24), cellb = rgba(0xFF, 0xFF, 0xFF, 0x60);
         if (g.gridCols() * g.gridRows() > 60) {   // rejilla muy grande: un fondo y lineas finas, en vez de un recuadro por casilla
             float ax, ay, bx, by, half = 31.f * g.zoomNow() * 0.5f;
@@ -657,7 +715,7 @@ static void drawGameUI(const Game& g) {
             rect(sx - 30, sy - 30, sx + 30, sy + 30, rgba(0x10, 0x20, 0x30, 0x50));
             spriteOf(i, sx, sy - 4, 0.8f, 0.f);
             if (g.remaining(i) > 6) textCentered(false, sx, sy + 10, "inf", 0.7f, 255, 255, 255);   // piezas ilimitadas (sandbox)
-            else for (int k = 0; k < g.remaining(i); k++) rect(sx - 24 + k * 10, sy + 20, sx - 18 + k * 10, sy + 26, rgba(0xFF, 0xFF, 0xFF, 0x80));
+            else { char nb[8]; snprintf(nb, sizeof(nb), "%d", g.remaining(i)); textLeft(sx - 27, sy + 4, nb, 1.15f, 255, 255, 255); }      // cantidad con la fuente del juego
             if (g.selected() == i) frameRect(sx - 30, sy - 30, sx + 30, sy + 30, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
         }
         if (!g.viewer()) textCentered(false, 320, 412, optTouch ? "X: poner   Tacho: borrar   Tilde: iniciar   START: pausa" : "X: poner  Cuadrado: quitar  Triángulo: iniciar  SELECT: ideas  L2: visor", 0.62f, 255, 255, 255);   // el cursor se dibuja al final, encima de los botones
@@ -673,25 +731,24 @@ static void drawGameUI(const Game& g) {
         }
         else if (g.time() < 5.f && !anyDev) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
     } else if (g.mode() == M_WIN) {
-        rect(100, 60, 540, 396, rgba(0x10, 0x20, 0x30, 0x60));
-        frameRect(100, 60, 540, 396, 3.f, rgba(0x40, 0xD0, 0x40, 0x80));
-        textCentered(false, 320, 68, "¡Nivel completado!", 1.45f, 140, 255, 140);
+        rect(205, 24, 435, 424, rgba(0x08, 0x20, 0x08, 0x58));                        // columna oscura como en el juego original
+        textCentered(false, 320, 40, "YEARH!", 1.7f, 255, 255, 255);
         const LevelData& LD = g.levelData();
         static const char* CAP[3] = { "Meta", "Caja estrella", "Tiempo" };
         bool got[3] = { true, g.starCollected(), LD.parTime > 0.f && g.finalTime() <= LD.parTime };
         for (int i = 0; i < 3; i++) {
-            float cx = 320 + (i - 1) * 130;
-            sprite(texDecor[DEC_GOLDSTAR], cx, 142, 70, 67, 0, got[i] ? rgba(0x80, 0x80, 0x80, 0x80) : rgba(0x30, 0x30, 0x30, 0x70));
-            textCentered(false, cx, 178, CAP[i], 0.62f, got[i] ? 255 : 160, got[i] ? 255 : 160, got[i] ? 255 : 160);
+            float cx = 320 + (i - 1) * 74, sz = (i == 1) ? 92.f : 70.f, cy = (i == 1) ? 124.f : 136.f;
+            float pop = 1.f + 0.06f * sinf(g_clock * 5.f + i);                         // las estrellas laten un poco
+            sprite(texDecor[DEC_GOLDSTAR], cx, cy, sz * pop, sz * 0.96f * pop, (i - 1) * 0.12f, got[i] ? rgba(0x80, 0x80, 0x80, 0x80) : rgba(0x30, 0x30, 0x30, 0x70));
+            textCentered(false, cx, 186, CAP[i], 0.5f, got[i] ? 255 : 150, got[i] ? 255 : 150, got[i] ? 255 : 150);
         }
         snprintf(buf, sizeof(buf), "Tiempo: %.1f s", g.finalTime());
-        textCentered(false, 320, 206, buf, 1.0f, 255, 255, 255);
-        if (g_newRecord) textCentered(false, 320, 234, "¡Nuevo récord!", 0.9f, 255, 230, 90);
-        else if (g_bestShown > 0.f) { snprintf(buf, sizeof(buf), "Mejor tiempo: %.1f s", g_bestShown); textCentered(false, 320, 234, buf, 0.8f, 220, 220, 220); }
-        if (LD.parTime > 0.f) { snprintf(buf, sizeof(buf), "Estrella de tiempo: %.1f s o menos", LD.parTime); textCentered(false, 320, 262, buf, 0.6f, 200, 200, 200); }
-        endRowDraw(288, 32, optTouch ? "Siguiente nivel" : "X: siguiente nivel", 1.0f, 1, true);
-        endRowDraw(320, 32, optTouch ? "Repetir este nivel" : "Círculo: repetir este nivel", 1.0f, 2, true);
-        endRowDraw(352, 32, optTouch ? "Elegir nivel" : "Triángulo: elegir nivel", 1.0f, 3, true);
+        textCentered(false, 320, 224, buf, 1.0f, 255, 255, 255);
+        if (g_newRecord) textCentered(false, 320, 254, "¡Nuevo récord!", 0.9f, 255, 230, 90);
+        else if (g_bestShown > 0.f) { snprintf(buf, sizeof(buf), "Mejor tiempo: %.1f s", g_bestShown); textCentered(false, 320, 254, buf, 0.7f, 220, 220, 220); }
+        if (LD.parTime > 0.f) { snprintf(buf, sizeof(buf), "Estrella de tiempo: %.1f s o menos", LD.parTime); textCentered(false, 320, 290, buf, 0.52f, 200, 200, 200); }
+        for (int i = 2; i >= 0; i--) winBtn(i);
+        if (!optTouch) textCentered(false, 320, 408, "X: siguiente   Círculo: repetir   Triángulo: niveles", 0.52f, 255, 255, 255);
     } else if (g.mode() == M_LOSE) {
         rect(110, 110, 530, 330, rgba(0x10, 0x20, 0x30, 0x60));
         frameRect(110, 110, 530, 330, 3.f, rgba(0xD0, 0x40, 0x40, 0x80));
@@ -830,15 +887,20 @@ int main(int, char**) {
             } else {
                 static const int ORD[3] = { 2, 0, 1 };                      // de izquierda a derecha: disquete, jugar, opciones
                 if (nav) {
-                    int p = 1; for (int k = 0; k < 3; k++) if (ORD[k] == titleSel) p = k;
-                    if (pad.eR && p < 2) titleSel = ORD[p + 1];
-                    if (pad.eL && p > 0) titleSel = ORD[p - 1];
+                    if (titleSel == 3) { if (pad.eU) titleSel = 0; }
+                    else {
+                        int p = 1; for (int k = 0; k < 3; k++) if (ORD[k] == titleSel) p = k;
+                        if (pad.eR && p < 2) titleSel = ORD[p + 1];
+                        if (pad.eL && p > 0) titleSel = ORD[p - 1];
+                        if (pad.eD) titleSel = 3;
+                    }
                 }
                 if (pStart) { sndPlay(SND_CLICK); screen = S_WORLDS; }
                 else if (act) {
                     sndPlay(SND_CLICK);
                     if (titleSel == 0) screen = S_WORLDS;
                     else if (titleSel == 1) { screen = S_OPTIONS; optSel = 0; }
+                    else if (titleSel == 3) { saveMsgText = "Cable Lan no Detectado"; saveMsgTimer = 3.0f; }
                     else { confirmOpen = true; confirmSel = 1; }
                 }
             }
@@ -864,7 +926,7 @@ int main(int, char**) {
             if (pO || (act && hover == 10)) { sndPlay(SND_CLICK); screen = S_TITLE; }
             else if (act && hover < 10) {
                 if (wsel == 0 || wsel == 1) { selWorld = wsel; sel = 0; sndPlay(SND_CLICK); screen = S_SELECT; }
-                else if (wsel == 3) { if (game.loadLevel(Game::sandboxIndex())) { sndPlay(SND_CLICK); screen = S_GAME; } }
+                else if (wsel == 3) { if (loadLvl(game, Game::sandboxIndex())) { sndPlay(SND_CLICK); screen = S_GAME; } }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
             }
         } else if (screen == S_SELECT) {
@@ -880,7 +942,7 @@ int main(int, char**) {
             if (pO || (act && hover == 10)) { sndPlay(SND_CLICK); screen = S_WORLDS; }
             else if (act && hover < 10) {
                 int li = Game::levelAt(selWorld, sel);
-                if (li >= 0 && game.loadLevel(li)) { sndPlay(SND_CLICK); screen = S_GAME; }
+                if (li >= 0 && loadLvl(game, li)) { sndPlay(SND_CLICK); screen = S_GAME; }
                 else { msgTimer = 3.0f; sndPlay(SND_LOSE); }
             }
         } else {   // S_GAME
@@ -895,7 +957,8 @@ int main(int, char**) {
                 if (gcy > SCREEN_H) { gcy = SCREEN_H; }
             }
             const bool selEdge = pad.edge & PAD_SELECT, l2Edge = pad.edge & PAD_L2;      // SELECT: libro de ideas, L2: visor (ambos modos)
-            if (selEdge && !g_paused && !game.viewer() && !endPanel && (game.mode() == M_BUILD || game.mode() == M_PLAY)) {
+            if (game.introActive()) { if (pX || cX || pStart) game.skipIntro(); else game.update(dt, GameInput()); handled = true; }
+            else if (selEdge && !g_paused && !game.viewer() && !endPanel && (game.mode() == M_BUILD || game.mode() == M_PLAY)) {
                 g_idea = !g_idea; if (g_idea) { gcx = 530.f; gcy = 60.f; } handled = true;
             } else if (l2Edge && !g_paused && !g_idea && game.mode() == M_BUILD) {
                 game.setViewer(!game.viewer()); if (game.viewer()) { gcx = 588.f; gcy = 66.f; } handled = true;
@@ -943,7 +1006,7 @@ int main(int, char**) {
             }
             else if (!handled && game.mode() == M_WIN && cX) {
                 int w = game.worldNow(), slot = Game::slotOf(game.levelIndex()) + 1, next = Game::levelAt(w, slot);
-                if (next >= 0 && game.loadLevel(next)) { sndPlay(SND_CLICK); }
+                if (next >= 0 && loadLvl(game, next)) { sndPlay(SND_CLICK); }
                 else { selWorld = w; sel = slot < 15 ? slot : 14; screen = S_SELECT; msgTimer = 3.0f; keepMsg = true; }
                 handled = true;
             }
@@ -994,9 +1057,10 @@ int main(int, char**) {
             drawFloppy(40, 330, titleSel == 2 && !confirmOpen);                // boton de guardar (disquete)
             if (!confirmOpen) {
                 float pulse = 2.f + 2.f * sinf(clock * 6.f);
-                if (titleSel == 0) ring(335, 234, 58.f + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                if (titleSel == 0) screenZoomDisc(335, 234, 56.f, 1.10f + 0.012f * pulse);
+                else if (titleSel == 3) screenZoomDisc(336, 388, 26.f, 1.18f);
                 else if (titleSel == 1) frameRect(400 - pulse, 271 - pulse, 560 + pulse, 311 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
-                if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 330, titleSel == 0 ? "Pulsá X para jugar" : (titleSel == 1 ? "Pulsá X para abrir las opciones" : "Pulsá X: guardar"), 1.2f, 255, 255, 255);
+                if (((int)(clock * 2.f)) % 2 == 0) textCentered(false, 320, 330, titleSel == 0 ? "Pulsá X para jugar" : (titleSel == 1 ? "Pulsá X para abrir las opciones" : (titleSel == 3 ? "Pulsá X: Rovio" : "Pulsá X: guardar")), 1.2f, 255, 255, 255);
             } else {
                 rect(0, 24, SCREEN_W, 424, rgba(0x00, 0x00, 0x00, 0x50));
                 rect(90, 140, 550, 320, rgba(0x10, 0x20, 0x30, 0x78));
@@ -1018,15 +1082,14 @@ int main(int, char**) {
             rect(MENU_PX[2], 24 + 40, MENU_PX[2] + 102, 24 + 328, rgba(0x10, 0x20, 0x30, 0x48));   // velo: solo el mundo que sigue bloqueado
             {
                 float pulse = 2.f + 2.f * sinf(clock * 6.f);
-                frameRect(MENU_PX[wsel] - pulse, 24 + 40 - pulse, MENU_PX[wsel] + 102 + pulse, 24 + 328 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                if (wsel < 3) screenZoomRect((float)MENU_PX[wsel], 64.f, (float)MENU_PX[wsel] + 102.f, 352.f, 1.07f + 0.01f * pulse);
             }
-            {   // Sandbox abierto: se tapa el candado y el cartel "LOCKED" del original
-                float cx = MENU_PX[3] + 51, cy = 24 + 190;
-                rect(cx - 40, cy - 40, cx + 40, cy + 40, rgba(0x58, 0xB0, 0x2A, 0x80));
-                frameRect(cx - 40, cy - 40, cx + 40, cy + 40, 3.f, rgba(0xE8, 0xF0, 0xD0, 0x80));
-                tri(cx - 12, cy - 22, cx - 12, cy + 22, cx + 24, cy, rgba(0xFF, 0xFF, 0xFF, 0x80));
-                rect(MENU_PX[3] + 18, 24 + 281, MENU_PX[3] + 84, 24 + 313, rgba(0x9A, 0x70, 0x38, 0x80));
-                textCentered(false, MENU_PX[3] + 51, 24 + 285, "ABIERTO", 0.55f, 255, 255, 255);
+            {   // Sandbox abierto: se reemplaza el boton por el dibujo de Sandbox.png y se escribe ABIERTO en el cartel
+                float k = (wsel == 3) ? 1.07f + 0.01f * (2.f + 2.f * sinf(clock * 6.f)) : 1.f;
+                float cx = MENU_PX[3] + 51, cy = 208;
+                sprite(texDecor[DEC_SANDBOXP], cx, cy, 102.f * k, 278.f * k, 0.f);
+                rect(cx - 33 * k, cy + 94 * k, cx + 33 * k, cy + 122 * k, rgba(0x9A, 0x70, 0x38, 0x80));
+                textCentered(false, cx, cy + 98 * k, "ABIERTO", 0.55f, 255, 255, 255);
             }
             textCentered(false, 320, 396, "X: elegir     Círculo: volver", 0.8f, 255, 255, 255);
             if (msgTimer > 0) {
@@ -1047,7 +1110,8 @@ int main(int, char**) {
                 else { int li = Game::levelAt(selWorld, i); for (int k = 0; li >= 0 && k < (int)sv.stars[li] && k < 3; k++) sprite(texDecor[DEC_GOLDSTAR], cx + (k - 1) * 17.f, cy + 47, 17, 16, 0); }   // estrellas ganadas
                 if (i == sel) {
                     float pulse = 2.f + 2.f * sinf(clock * 6.f);
-                    frameRect(cx - 38 - pulse, cy - 38 - pulse, cx + 38 + pulse, cy + 38 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+                    if (i < Game::levelCount(selWorld) || selWorld != 0) screenZoomRect(cx - 33.f, cy - 33.f, cx + 33.f, cy + 33.f, 1.14f + 0.015f * pulse);
+                    else frameRect(cx - 38 - pulse, cy - 38 - pulse, cx + 38 + pulse, cy + 38 + pulse, 4.f, rgba(0xFF, 0xE0, 0x20, 0x80));
                 }
             }
             textCentered(false, 320, 396, "X: jugar     Círculo: volver", 0.8f, 255, 255, 255);
@@ -1082,6 +1146,7 @@ int main(int, char**) {
             textCentered(false, 320, 340, mcOK ? "Guardado manual: botón del disquete en el inicio" : "Sin memory card: no se puede guardar", 0.6f, mcOK ? 170 : 255, mcOK ? 255 : 170, 170);
             textCentered(false, 320, 396, "X: cambiar     Círculo: volver", 0.8f, 255, 255, 255);
         } else {
+            drawSea(game);
             drawDecor(game, 0);
             drawTerrain(game);
             drawDecor(game, 1);
@@ -1106,7 +1171,7 @@ int main(int, char**) {
                 spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);
-            if (optTouch && !g_paused && !g_idea) { float hx = gcx, hy = gcy; if (game.mode() == M_BUILD && !game.viewer()) game.cursor(hx, hy); drawTouchHud(game, hx, hy); }
+            if (optTouch && !g_paused && !g_idea && !game.introActive()) { float hx = gcx, hy = gcy; if (game.mode() == M_BUILD && !game.viewer()) game.cursor(hx, hy); drawTouchHud(game, hx, hy); }
             if (game.viewer()) { rect(0, 404, SCREEN_W, 440, rgba(0x00, 0x00, 0x00, 0x60)); textCentered(false, 320, 410, optTouch ? "Visor: tocá la lupa para volver" : "Visor: L2 o Círculo para volver", 0.7f, 255, 255, 255); }
             if (g_paused) drawPauseMenu(game);
             if (g_idea) drawIdeaPopup(game);

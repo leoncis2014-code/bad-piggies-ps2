@@ -40,6 +40,7 @@ public:
     std::vector<Seg> segs;                    // aristas del terreno: los globos revientan al tocarlo
     static constexpr float FAN_N = 6.0f;      // empuje de cada ventilador (newtons): no depende del tamano del vehiculo
     bool popped[MAXR][MAXC];
+    float introT = 0.f; static constexpr float INTRO_T = 2.2f;   // animacion de inicio: la camara muestra la meta y vuelve a la rejilla
     int balN[MAXR][MAXC];                                      // globos que le quedan a cada objeto de globos (1 o 2)
     static bool isBal(int tp) { return tp == P_BALLOON || tp == P_BALLOON2; }
     bool blowUsed[MAXR][MAXC]; float blowT[MAXR][MAXC];       // sopladores: ya usado / segundos de soplido que quedan
@@ -247,6 +248,7 @@ public:
     }
 
     void update(float dt, const GameInput& in) {
+        if (introT > 0.f) { introT -= dt; if (introT < 0.f) introT = 0.f; return; }
         if (mode == M_BUILD) {
             cx += in.stickX * 320.f * dt; cy += in.stickY * 320.f * dt;
             if (cx < 0) { cx = 0; } if (cx > SCREEN_W) { cx = SCREEN_W; }
@@ -412,7 +414,17 @@ void Game::update(float dt, const GameInput& in) { g->update(dt, in); }
 int Game::drawList(DrawItem* out, int max) const { return g->draw(out, max); }
 Mode Game::mode() const { return g->mode; }
 void Game::cursor(float& x, float& y) const { x = g->cx; y = g->cy; }
-void Game::camera(float& x, float& y) const { x = g->viewerOn ? g->vcx : g->camx; y = g->viewerOn ? g->vcy : g->camy; }
+void Game::startIntro() { if (g->mode == M_BUILD && !(g->L->flags & 1)) g->introT = GameImpl::INTRO_T; }
+void Game::skipIntro() { g->introT = 0.f; }
+bool Game::introActive() const { return g->introT > 0.f; }
+void Game::camera(float& x, float& y) const {
+    if (g->introT > 0.f) {                      // primero se ve la bandera de meta y despues la camara se desliza hasta la rejilla
+        float t = 1.f - g->introT / GameImpl::INTRO_T, hold = 0.38f, u = t < hold ? 0.f : (t - hold) / (1.f - hold);
+        u = u * u * (3.f - 2.f * u);
+        float gx0 = g->L->goalX, gy0 = g->L->goalY - 30.f;
+        x = gx0 + (g->camx - gx0) * u; y = gy0 + (g->camy - gy0) * u; return;
+    }
+    x = g->viewerOn ? g->vcx : g->camx; y = g->viewerOn ? g->vcy : g->camy; }
 void Game::setViewer(bool on) { if (on && g->mode != M_BUILD) return; g->viewerOn = on; if (on) g->computeViewer(); }
 bool Game::viewer() const { return g->viewerOn; }
 int Game::selected() const { return g->sel; }

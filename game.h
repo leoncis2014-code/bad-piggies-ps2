@@ -34,6 +34,9 @@ public:
     int  worldNow() const;
     void toggleFans();                         // boton de ventilador del juego
     void popOneBalloon();                      // boton de globo del juego
+    void startIntro();                         // animacion de inicio de nivel (solo si no es el sandbox)
+    void skipIntro();
+    bool introActive() const;
     void fireBlowers();                        // boton del soplador: dispara los sopladores que aun no se usaron
     int  blowerCount() const;                  // sopladores colocados en el vehiculo
     int  blowersLeft() const;                  // sopladores colocados que todavia no se dispararon
