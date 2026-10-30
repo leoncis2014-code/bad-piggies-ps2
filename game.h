@@ -3,7 +3,8 @@
 #include <vector>
 #include "level.h"
 
-enum PieceType { P_PIG = 0, P_BOX = 1, P_WHEEL = 2, P_FAN = 3, P_BALLOON = 4, P_COUNT = 5 };   // ventilador y globo: solo en el sandbox
+enum PieceType { P_PIG = 0, P_BOX = 1, P_WHEEL = 2, P_FAN = 3, P_BALLOON = 4, P_BLOWER = 5, P_BALLOON2 = 6, P_COUNT = 7 };   // P_BALLOON2: dos globos en un solo objeto
+//   // soplador: empujon unico con boton; ventilador y globo: ver cada nivel
 enum Mode { M_BUILD, M_PLAY, M_WIN, M_LOSE };
 
 struct GameInput {
@@ -33,6 +34,10 @@ public:
     int  worldNow() const;
     void toggleFans();                         // boton de ventilador del juego
     void popOneBalloon();                      // boton de globo del juego
+    void fireBlowers();                        // boton del soplador: dispara los sopladores que aun no se usaron
+    int  blowerCount() const;                  // sopladores colocados en el vehiculo
+    int  blowersLeft() const;                  // sopladores colocados que todavia no se dispararon
+    bool blowerActive(int col, int row) const; // true mientras ese soplador esta soplando (para las nubecitas)
     static int sandboxIndex();                 // indice del nivel sandbox
     bool isSandbox() const;
     int  gridCols() const;
