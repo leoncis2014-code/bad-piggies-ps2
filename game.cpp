@@ -32,13 +32,16 @@ public:
     unsigned events = 0;
     b2World* world = nullptr;
     b2Body* chassis = nullptr;
-    b2Body* wheels[MAXR*MAXC];
+    b2Body* wheels[MAXR*MAXC]; b2RevoluteJoint* wjoint[MAXR*MAXC]; bool wElec[MAXR*MAXC];
+    bool motorsOn = false; bool tntUsed[MAXR][MAXC];
+    struct Blast { float x, y, t; }; std::vector<Blast> blastList;
+    static constexpr float TNT_J = 8.0f, MOTOR_W = 22.0f, MOTOR_T = 1.6f;   // impulso del TNT (N*s), velocidad (rad/s) y torque maximo (N*m) de la rueda electrica
     int nwheels = 0;
     bool fansOn = false;
     unsigned char rot[MAXR][MAXC];            // orientacion de cada ventilador (0..3 = 0, 90, 180, 270 grados)
     struct Seg { float x1, y1, x2, y2; };
     std::vector<Seg> segs;                    // aristas del terreno: los globos revientan al tocarlo
-    static constexpr float FAN_N = 6.0f;      // empuje de cada ventilador (newtons): no depende del tamano del vehiculo
+    static constexpr float FAN_N = 2.0f;      // empuje de cada ventilador (newtons): suave, como en el video del original (antes 6.0)
     bool popped[MAXR][MAXC];
     float introT = 0.f; static constexpr float INTRO_T = 2.2f;   // animacion de inicio: la camara muestra la meta y vuelve a la rejilla
     int balN[MAXR][MAXC];                                      // globos que le quedan a cada objeto de globos (1 o 2)
@@ -91,9 +94,10 @@ public:
             sel = L->pieces[P_BOX] > 0 ? P_BOX : typeAtSlot(0);
         }
         mode = M_BUILD; t = 0; stuck = 0; flip = 0; lookOX = lookOY = 0; starGot = false; resStars = 0; finalT = 0;
-        camx = gx(); camy = gy() - 10.f;
+        camx = gx(); camy = gy() - 10.f + (rows() > 3 ? 40.f / zoom() : 0.f);      // con rejillas altas (sandbox) se sube la camara para que la rejilla no tape la bandeja
         fansOn = false;                       // los ventiladores arrancan apagados: se encienden con su boton
-        for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { popped[r][c] = false; thrFx[r][c] = nullptr; balN[r][c] = 0; blowUsed[r][c] = false; blowT[r][c] = 0.f; }
+        for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) { popped[r][c] = false; thrFx[r][c] = nullptr; balN[r][c] = 0; blowUsed[r][c] = false; blowT[r][c] = 0.f; tntUsed[r][c] = false; }
+        motorsOn = false; blastList.clear();
         cx = SCREEN_W * 0.5f; cy = SCREEN_H * 0.5f;
     }
 
@@ -181,7 +185,7 @@ public:
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
             int tp = cells[r][c];
             float lx = lxOf(c), ly = lyOf(r);
-            if (tp == P_FAN || isBal(tp) || tp == P_BLOWER) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
+            if (tp == P_FAN || isBal(tp) || tp == P_BLOWER || tp == P_TNT) {   // piezas nuevas del sandbox: bloque liviano que ademas empuja o levanta
                 b2PolygonShape fs; fs.SetAsBox(0.36f, 0.36f, b2Vec2(lx, ly), 0.f);
                 b2FixtureDef ff; ff.shape = &fs; ff.density = 0.35f; ff.friction = 0.3f; ff.restitution = 0.1f;
                 if (isBal(tp)) { ff.isSensor = true; ff.density = 0.2f; balN[r][c] = (tp == P_BALLOON2) ? 2 : 1; }       // el globo no es solido: no choca ni estorba
@@ -210,7 +214,7 @@ public:
             }
         }
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {
-            if (cells[r][c] != P_WHEEL) continue;
+            if (cells[r][c] != P_WHEEL && cells[r][c] != P_EWHEEL) continue;
             b2BodyDef wd; wd.type = b2_dynamicBody; wd.allowSleep = false;
             wd.position.Set(cellX(c) / PPM, cellY(r) / PPM + WHEEL_DROP);
             b2Body* w = world->CreateBody(&wd);
@@ -218,7 +222,7 @@ public:
             b2FixtureDef fd; fd.shape = &cs; fd.density = 0.6f; fd.friction = 0.9f; fd.restitution = 0.1f;
             w->CreateFixture(&fd);
             b2RevoluteJointDef jd; jd.Initialize(chassis, w, w->GetPosition());
-            world->CreateJoint(&jd);
+            wjoint[nwheels] = (b2RevoluteJoint*)world->CreateJoint(&jd); wElec[nwheels] = (cells[r][c] == P_EWHEEL);
             wheels[nwheels] = w; wheelCell[nwheels][0] = c; wheelCell[nwheels][1] = r; nwheels++;
         }
         // empujon inicial para salir de la plataforma
@@ -303,6 +307,10 @@ public:
             }
             if (hit && thrFx[r][c]) { balN[r][c] = 0; popped[r][c] = true; chassis->DestroyFixture(thrFx[r][c]); thrFx[r][c] = nullptr; events |= EV_PLACE; }
         }
+        for (int i = 0; i < nwheels; i++) if (wElec[i]) {                            // ruedas electricas: motor encendido/apagado con su boton
+            if (motorsOn && wheels[i]->GetAngularVelocity() < MOTOR_W) { wheels[i]->ApplyTorque(MOTOR_T, true); }    // solo empuja: no frena si el vehiculo ya va mas rapido
+        }
+        for (size_t k = 0; k < blastList.size();) { blastList[k].t += dt; if (blastList[k].t > 0.5f) blastList.erase(blastList.begin() + k); else k++; }
         for (int r = 0; r < rows(); r++) for (int c = 0; c < cols(); c++) {          // sopladores: empujon unico repartido en un instante corto
             if (cells[r][c] != P_BLOWER || blowT[r][c] <= 0.f) continue;
             float a = chassis->GetAngle() + (float)rot[r][c] * 1.5707963f;
@@ -358,12 +366,13 @@ public:
                     int tp = cells[r][c];
                     if (tp < 0) continue;
                     if (playing) {
-                        if (tp == P_WHEEL) continue;                  // las ruedas se dibujan aparte
+                        if (tp == P_WHEEL || tp == P_EWHEEL) continue;                  // las ruedas se dibujan aparte
+                        if (tp == P_TNT && tntUsed[r][c]) continue;                       // TNT ya explotado
                         if (isBal(tp) && popped[r][c]) continue;  // globo pinchado
                         b2Vec2 w = chassis->GetWorldPoint(b2Vec2(lx, ly));
                         out[n].type = (tp == P_BALLOON2 && balN[r][c] == 1) ? P_BALLOON : tp; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = chassis->GetAngle() + ((tp == P_FAN || tp == P_BLOWER) ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
                     } else {
-                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + (tp == P_WHEEL ? WHEEL_DROP * PPM : 0.f); out[n].angle = ((tp == P_FAN || tp == P_BLOWER) ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
+                        out[n].type = tp; out[n].x = cellX(c); out[n].y = cellY(r) + ((tp == P_WHEEL || tp == P_EWHEEL) ? WHEEL_DROP * PPM : 0.f); out[n].angle = ((tp == P_FAN || tp == P_BLOWER) ? (float)rot[r][c] * 1.5707963f : 0.f); n++;
                     }
                 } else if (pig[r][c]) {
                     if (playing) {
@@ -375,7 +384,7 @@ public:
         if (playing)
             for (int i = 0; i < nwheels && n < max; i++) {
                 b2Vec2 w = wheels[i]->GetPosition();
-                out[n].type = P_WHEEL; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = wheels[i]->GetAngle(); n++;
+                out[n].type = wElec[i] ? P_EWHEEL : P_WHEEL; out[n].x = w.x * PPM; out[n].y = w.y * PPM; out[n].angle = wheels[i]->GetAngle(); n++;
             }
         return n;
     }
@@ -394,6 +403,22 @@ void Game::fireBlowers() { if (g->mode != M_PLAY) return; bool any = false; for 
 int Game::blowerCount() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BLOWER) n++; return n; }
 int Game::blowersLeft() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_BLOWER && !g->blowUsed[r][c]) n++; return n; }
 bool Game::blowerActive(int col, int row) const { return col >= 0 && row >= 0 && col < MAXC && row < MAXR && g->blowT[row][col] > 0.f; }
+void Game::detonateTnt() {
+    if (g->mode != M_PLAY) return;
+    for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_TNT && !g->tntUsed[r][c]) {
+        g->tntUsed[r][c] = true;
+        b2Vec2 p = g->chassis->GetWorldPoint(b2Vec2(g->lxOf(c), g->lyOf(r))), d = g->chassis->GetWorldCenter() - p;
+        if (d.Length() < 0.2f) d.Set(0.f, -1.f); else d.Normalize();
+        g->chassis->ApplyLinearImpulse(GameImpl::TNT_J * d, p, true);            // empuja al vehiculo lejos del TNT (y lo hace girar si no esta alineado)
+        if (g->thrFx[r][c]) { g->chassis->DestroyFixture(g->thrFx[r][c]); g->thrFx[r][c] = nullptr; }
+        g->blastList.push_back({ p.x * PPM, p.y * PPM, 0.f }); g->events |= EV_BAD;
+    }
+}
+int Game::tntLeft() const { int n = 0; for (int r = 0; r < MAXR; r++) for (int c = 0; c < MAXC; c++) if (g->cells[r][c] == P_TNT && !g->tntUsed[r][c]) n++; return n; }
+void Game::toggleMotors() { if (g->mode == M_PLAY) { g->motorsOn = !g->motorsOn; g->events |= EV_CLICK; } }
+int Game::motorCount() const { int n = 0; for (int i = 0; i < g->nwheels; i++) if (g->wElec[i]) n++; return n; }
+bool Game::motorsOn() const { return g->motorsOn; }
+int Game::blasts(DrawItem* out, int max) const { int n = 0; for (size_t k = 0; k < g->blastList.size() && n < max; k++) { out[n].type = 0; out[n].x = g->blastList[k].x; out[n].y = g->blastList[k].y; out[n].angle = g->blastList[k].t / 0.5f; n++; } return n; }
 void Game::toggleFans() { if (g->mode == M_PLAY) { g->fansOn = !g->fansOn; g->events |= EV_CLICK; } }
 void Game::popOneBalloon() { if (g->mode == M_PLAY) g->popBalloon(); }
 int Game::sandboxIndex() { return NUM_LEVELS_DATA - 1; }

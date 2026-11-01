@@ -3,7 +3,7 @@
 #include <vector>
 #include "level.h"
 
-enum PieceType { P_PIG = 0, P_BOX = 1, P_WHEEL = 2, P_FAN = 3, P_BALLOON = 4, P_BLOWER = 5, P_BALLOON2 = 6, P_COUNT = 7 };   // P_BALLOON2: dos globos en un solo objeto
+enum PieceType { P_PIG = 0, P_BOX = 1, P_WHEEL = 2, P_FAN = 3, P_BALLOON = 4, P_BLOWER = 5, P_BALLOON2 = 6, P_TNT = 7, P_EWHEEL = 8, P_COUNT = 9 };   // P_BALLOON2: dos globos en un solo objeto
 //   // soplador: empujon unico con boton; ventilador y globo: ver cada nivel
 enum Mode { M_BUILD, M_PLAY, M_WIN, M_LOSE };
 
@@ -37,6 +37,12 @@ public:
     void startIntro();                         // animacion de inicio de nivel (solo si no es el sandbox)
     void skipIntro();
     bool introActive() const;
+    void detonateTnt();                        // boton de TNT: explotan los TNT que aun no se usaron
+    int  tntLeft() const;
+    void toggleMotors();                       // boton de la rueda electrica: enciende/apaga los motores
+    int  motorCount() const;
+    bool motorsOn() const;
+    int  blasts(DrawItem* out, int max) const; // explosiones en curso (x, y en pixeles de nivel; angle = avance 0..1)
     void fireBlowers();                        // boton del soplador: dispara los sopladores que aun no se usaron
     int  blowerCount() const;                  // sopladores colocados en el vehiculo
     int  blowersLeft() const;                  // sopladores colocados que todavia no se dispararon

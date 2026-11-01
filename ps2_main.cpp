@@ -180,10 +180,19 @@ static void sprite(GSTEXTURE& t, float cx, float cy, float w, float h, float ang
     gsKit_prim_triangle_texture(gs, &t, X[1], Y[1], tw, 0, X[3], Y[3], tw, th, X[2], Y[2], 0, th, 1, col);
 }
 static GSTEXTURE& texOf(int type) {
-    switch (type) { case P_PIG: return texPig; case P_BOX: return texBox; case P_WHEEL: return texWheel; case P_FAN: return texDecor[DEC_FAN]; case P_BLOWER: return texDecor[DEC_BLOWER]; case P_BALLOON2: return texDecor[DEC_BALLOON2]; default: return texDecor[DEC_BALLOON]; }
+    switch (type) { case P_PIG: return texPig; case P_BOX: return texBox; case P_WHEEL: return texWheel; case P_FAN: return texDecor[DEC_FAN]; case P_BLOWER: return texDecor[DEC_BLOWER]; case P_BALLOON2: return texDecor[DEC_BALLOON2]; case P_TNT: return texDecor[DEC_TNT]; case P_EWHEEL: return texWheel; default: return texDecor[DEC_BALLOON]; }
 }
 static void spriteOf(int type, float cx, float cy, float scale, float ang) {
     GSTEXTURE& t = texOf(type);
+    if (type == P_EWHEEL) {                                         // rueda electrica: la rueda comun teñida de azul y con un rayo
+        sprite(t, cx, cy, t.Width * scale, t.Height * scale, ang, rgba(0x60, 0xA0, 0xFF, 0x80));
+        float r = t.Width * scale * 0.20f, ca = cosf(ang), sa = sinf(ang);
+        auto P = [&](float px, float py, float& ox, float& oy) { ox = cx + px * ca - py * sa; oy = cy + px * sa + py * ca; };
+        float ax, ay, bx, by, ccx, ccy, dx, dy;
+        P(r * 0.3f, -r * 1.5f, ax, ay); P(-r * 0.7f, r * 0.1f, bx, by); P(r * 0.1f, r * 0.1f, ccx, ccy); P(-r * 0.3f, r * 1.5f, dx, dy);
+        tri(ax, ay, bx, by, ccx, ccy, rgba(0xFF, 0xE8, 0x40, 0x80)); tri(ccx, ccy, dx, dy, bx, by, rgba(0xFF, 0xE8, 0x40, 0x80));
+        return;
+    }
     sprite(t, cx, cy, t.Width * scale, t.Height * scale, ang);
 }
 
@@ -362,30 +371,37 @@ static void drawFloppy(float cx, float cy, bool hot) {      // icono de disquete
     if (hot) frameRect(cx - 27, cy - 27, cx + 27, cy + 27, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
 }
 // botones azules de la partida (como en el juego original): uno por tipo de pieza activable
-static int playButtons(const Game& g, float xs[3], int ty[3]) {    // ty: 0 = ventilador, 1 = globo, 2 = soplador
+static int playButtons(const Game& g, float xs[5], int ty[5]) {    // ty: 0 = ventilador, 1 = globo, 2 = soplador, 3 = TNT, 4 = motor de la rueda electrica
     int n = 0;
     if (g.blowersLeft() > 0) ty[n++] = 2;
     if (g.fanCount() > 0) ty[n++] = 0;
     if (g.balloonsLeft() > 0) ty[n++] = 1;
+    if (g.tntLeft() > 0) ty[n++] = 3;
+    if (g.motorCount() > 0) ty[n++] = 4;
     for (int i = 0; i < n; i++) xs[i] = 320.f + ((float)i - (float)(n - 1) * 0.5f) * 80.f;
     return n;
 }
 static const float PLAY_BTN_Y = 366.f;
 static int playButtonAt(const Game& g, float x, float y) {
-    float xs[3]; int ty[3]; int n = playButtons(g, xs, ty);
+    float xs[5]; int ty[5]; int n = playButtons(g, xs, ty);
     for (int i = 0; i < n; i++) { float dx = x - xs[i], dy = y - PLAY_BTN_Y; if (dx * dx + dy * dy < 32.f * 32.f) return ty[i]; }
     return -1;
 }
 static void drawPlayButtons(const Game& g) {
-    float xs[3]; int ty[3]; int n = playButtons(g, xs, ty);
+    float xs[5]; int ty[5]; int n = playButtons(g, xs, ty);
     int over = playButtonAt(g, gcx, gcy);
     for (int i = 0; i < n; i++) {
         float cx = xs[i], cy = PLAY_BTN_Y;
-        bool on = (ty[i] == 0) && g.fansOn();
+        bool on = ((ty[i] == 0) && g.fansOn()) || ((ty[i] == 4) && g.motorsOn());
         float k = (over == ty[i]) ? 1.18f : 1.f;                                   // al apuntarlo, el boton se agranda
         sprite(texDecor[DEC_BTN], cx, cy, 62.f * k, 61.f * k, 0.f, on ? rgba(0x60, 0xE8, 0x60, 0x80) : 0);
-        int gi = ty[i] == 0 ? DEC_GFAN : (ty[i] == 2 ? DEC_GBLOWER : DEC_GBALLOON);
-        sprite(texDecor[gi], cx, cy - 1, texDecor[gi].Width * 0.62f * k, texDecor[gi].Height * 0.62f * k, 0.f);
+        if (ty[i] == 4) {                                                           // motor: rayo blanco
+            float r = 12.f * k; u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80);
+            tri(cx + r * 0.35f, cy - r * 1.5f, cx - r * 0.75f, cy + r * 0.1f, cx + r * 0.1f, cy + r * 0.1f, w); tri(cx + r * 0.1f, cy + r * 0.1f, cx - r * 0.35f, cy + r * 1.5f, cx - r * 0.75f, cy + r * 0.1f, w);
+        } else {
+            int gi = ty[i] == 0 ? DEC_GFAN : (ty[i] == 2 ? DEC_GBLOWER : (ty[i] == 3 ? DEC_GTNT : DEC_GBALLOON));
+            sprite(texDecor[gi], cx, cy - 1, texDecor[gi].Width * 0.62f * k, texDecor[gi].Height * 0.62f * k, 0.f);
+        }
         if (ty[i] == 1 && g.balloonsLeft() > 1) { char b[8]; snprintf(b, sizeof(b), "x%d", g.balloonsLeft()); textLeft(cx + 16 * k, cy + 12 * k, b, 0.6f, 255, 255, 255); }
     }
 }
@@ -609,6 +625,37 @@ static void drawDecor(const Game& g, int layer) {
 }
 
 // arena, espuma y mar debajo del nivel, con olas que se mueven (como el fondo del juego original)
+// fondo nocturno del sandbox (cielo azul oscuro, luna, colinas y arboles de silueta, como en los videos)
+static void drawNight(const Game& g) {
+    float cx, cy; g.camera(cx, cy);
+    const int B = 18;
+    for (int i = 0; i < B; i++) {                                                   // cielo con degradado
+        float t = (float)i / (B - 1);
+        rect(0, SCREEN_H * 0.80f * i / B, SCREEN_W, SCREEN_H * 0.80f * (i + 1) / B + 1.f, rgba((int)(0x12 + 0x3C * t), (int)(0x1C + 0x56 * t), (int)(0x48 + 0x5A * t), 0x80));
+    }
+    rect(0, SCREEN_H * 0.80f, SCREEN_W, SCREEN_H, rgba(0x14, 0x20, 0x44, 0x80));
+    disc(470, 118, 40.f, rgba(0x52, 0x72, 0xB0, 0x40));                              // resplandor
+    disc(470, 118, 25.f, rgba(0xEA, 0xF2, 0xFF, 0x80));                              // luna
+    for (int layer = 0; layer < 2; layer++) {                                       // dos capas de colinas con paralaje
+        float par = layer == 0 ? 0.12f : 0.30f, base = layer == 0 ? 262.f : 300.f;
+        u64 col = layer == 0 ? rgba(0x1E, 0x34, 0x66, 0x80) : rgba(0x12, 0x22, 0x44, 0x80);
+        for (int x = 0; x < (int)SCREEN_W; x += 8) {
+            float wx = x + cx * par;
+            float y = base + sinf(wx * 0.010f) * 26.f + sinf(wx * 0.027f + 1.f) * 11.f;
+            rect((float)x, y, (float)x + 9.f, SCREEN_H, col);
+        }
+        if (layer == 1) {                                                           // arboles de silueta sobre la colina cercana
+            for (int k = -2; k < 14; k++) {
+                float wx = k * 64.f - fmodf(cx * par, 64.f), y = base + sinf((wx + cx * par) * 0.010f) * 26.f + sinf((wx + cx * par) * 0.027f + 1.f) * 11.f;
+                float hgt = 30.f + 14.f * sinf(k * 7.3f + (float)(int)((cx * par) / 64.f) * 3.1f);
+                rect(wx - 2.f, y - hgt, wx + 2.f, y + 2.f, rgba(0x0C, 0x16, 0x30, 0x80));
+                tri(wx - 15.f, y - hgt * 0.45f, wx + 15.f, y - hgt * 0.45f, wx, y - hgt - 12.f, rgba(0x0C, 0x16, 0x30, 0x80));
+                tri(wx - 11.f, y - hgt * 0.80f, wx + 11.f, y - hgt * 0.80f, wx, y - hgt - 24.f, rgba(0x0C, 0x16, 0x30, 0x80));
+            }
+        }
+    }
+}
+
 static void drawSea(const Game& g) {
     const LevelData& L = g.levelData();
     if (L.flags & 1) return;                                   // el sandbox tiene su propio fondo
@@ -637,7 +684,7 @@ static void drawTerrain(const Game& g) {
     const LevelData& L = g.levelData();
     bool textured = L.texW > 0;
     GSTEXTURE* tt = textured ? &texTerr : NULL;
-    u64 white = rgba(0x80, 0x80, 0x80, 0x80), flat = rgba(0x3A, 0x66, 0x66, 0x80);
+    u64 white = rgba(0x80, 0x80, 0x80, 0x80), flat = rgba(0x2C, 0x58, 0x66, 0x80);
     static float X[1024], Y[1024], U[1024], V[1024];
     int n = L.npts < 1024 ? L.npts : 1024;
     for (int i = 0; i < n; i++) {
@@ -691,6 +738,16 @@ static void endRowDraw(float ytop, float h, const char* text, float scale, int c
     }
     textCentered(false, 320, ytop + 2, text, scale, 255, 255, 255);
 }
+static const char* hintLine(const Game& g) {                    // ayuda del modo fisico: solo los dispositivos que hay en el vehiculo
+    static char b[160]; b[0] = 0;
+    if (g.fanCount() > 0) strcat(b, "R1: ventilador   ");
+    if (g.blowerCount() > 0) strcat(b, "R2: soplador   ");
+    if (g.balloonsLeft() > 0) strcat(b, "L1: globo   ");
+    if (g.tntLeft() > 0) strcat(b, "X: TNT   ");
+    if (g.motorCount() > 0) strcat(b, "Cuadrado: motor   ");
+    strcat(b, "Círculo: construir");
+    return b;
+}
 static void drawGameUI(const Game& g) {
     char buf[64];
     if (g.mode() == M_BUILD && !g.introActive()) {
@@ -714,15 +771,14 @@ static void drawGameUI(const Game& g) {
             float sx, sy; g.traySlot(i, sx, sy);
             rect(sx - 30, sy - 30, sx + 30, sy + 30, rgba(0x10, 0x20, 0x30, 0x50));
             spriteOf(i, sx, sy - 4, 0.8f, 0.f);
-            if (g.remaining(i) > 6) textCentered(false, sx, sy + 10, "inf", 0.7f, 255, 255, 255);   // piezas ilimitadas (sandbox)
-            else { char nb[8]; snprintf(nb, sizeof(nb), "%d", g.remaining(i)); textLeft(sx - 27, sy + 4, nb, 1.15f, 255, 255, 255); }      // cantidad con la fuente del juego
+            { char nb[8]; snprintf(nb, sizeof(nb), "%d", g.remaining(i)); textLeft(sx - 27, sy + 4, nb, 1.15f, 255, 255, 255); }      // cantidad con la fuente del juego
             if (g.selected() == i) frameRect(sx - 30, sy - 30, sx + 30, sy + 30, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
         }
         if (!g.viewer()) textCentered(false, 320, 412, optTouch ? "X: poner   Tacho: borrar   Tilde: iniciar   START: pausa" : "X: poner  Cuadrado: quitar  Triángulo: iniciar  SELECT: ideas  L2: visor", 0.62f, 255, 255, 255);   // el cursor se dibuja al final, encima de los botones
     } else if (g.mode() == M_PLAY) {
-        const bool anyDev = g.fanCount() > 0 || g.balloonsLeft() > 0 || g.blowerCount() > 0;
+        const bool anyDev = g.fanCount() > 0 || g.balloonsLeft() > 0 || g.blowerCount() > 0 || g.tntLeft() > 0 || g.motorCount() > 0;
         if (optTouch && anyDev) drawPlayButtons(g);
-        if (anyDev) textCentered(false, 320, 408, optTouch ? "Cursor + X sobre los botones azules   Círculo: construir" : "R1: ventilador   R2: soplador   L1: pinchar globo   Círculo: construir", 0.62f, 255, 255, 255);
+        if (anyDev) textCentered(false, 320, 408, optTouch ? "Cursor + X sobre los botones azules   Círculo: construir" : hintLine(g), 0.62f, 255, 255, 255);
         else if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir   Stick derecho: cámara", 0.62f, 255, 255, 255);
         if (g.isSandbox()) {
             char b2[48];
@@ -1014,9 +1070,11 @@ int main(int, char**) {
                 if (pad.edge & PAD_R1) game.toggleFans();
                 if (pad.edge & PAD_L1) game.popOneBalloon();
                 if (pad.edge & PAD_R2) game.fireBlowers();
+                if (pad.edge & PAD_CROSS) game.detonateTnt();
+                if (pad.edge & PAD_SQUARE) game.toggleMotors();
             }
             if (!handled && game.mode() == M_PLAY && optTouch) {          // modo tactil: botones azules de los dispositivos
-                if (cX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); else if (b == 2) game.fireBlowers(); }
+                if (cX) { int b = playButtonAt(game, gcx, gcy); if (b == 0) game.toggleFans(); else if (b == 1) game.popOneBalloon(); else if (b == 2) game.fireBlowers(); else if (b == 3) game.detonateTnt(); else if (b == 4) game.toggleMotors(); }
             }
             if (game.mode() != M_BUILD) g_trash = false;
             if (!handled) {
@@ -1146,10 +1204,18 @@ int main(int, char**) {
             textCentered(false, 320, 340, mcOK ? "Guardado manual: botón del disquete en el inicio" : "Sin memory card: no se puede guardar", 0.6f, mcOK ? 170 : 255, mcOK ? 255 : 170, 170);
             textCentered(false, 320, 396, "X: cambiar     Círculo: volver", 0.8f, 255, 255, 255);
         } else {
-            drawSea(game);
+            if (game.isSandbox()) drawNight(game); else drawSea(game);
             drawDecor(game, 0);
             drawTerrain(game);
             drawDecor(game, 1);
+            {   // explosiones de TNT: un destello que crece y se apaga
+                DrawItem bl[8]; int nb = game.blasts(bl, 8);
+                for (int i = 0; i < nb; i++) {
+                    float sx, sy; worldToScreen(game, bl[i].x, bl[i].y, sx, sy); float u = bl[i].angle, z = game.zoomNow();
+                    disc(sx, sy, (16.f + 80.f * u) * z * 0.5f, rgba(0xFF, 0x90, 0x20, (int)(0x70 * (1.f - u))));
+                    disc(sx, sy, (10.f + 48.f * u) * z * 0.5f, rgba(0xFF, 0xE8, 0x70, (int)(0x78 * (1.f - u))));
+                }
+            }
             if (!game.isSandbox()) {   // bandera de meta (cuadros) parada en el suelo
                 const LevelData& L = game.levelData();
                 float fx, fy; worldToScreen(game, L.goalX, L.goalY - 57.f, fx, fy);
