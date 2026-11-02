@@ -34,6 +34,8 @@ public:
     int  worldNow() const;
     void toggleFans();                         // boton de ventilador del juego
     void popOneBalloon();                      // boton de globo del juego
+    void cycleCamera();                        // R3: cambia entre 3 distancias de camara durante la partida (0 normal, 1 lejos, 2 cerca)
+    int  cameraLevel() const;
     void startIntro();                         // animacion de inicio de nivel (solo si no es el sandbox)
     void skipIntro();
     bool introActive() const;

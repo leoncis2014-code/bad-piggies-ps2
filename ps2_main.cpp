@@ -408,6 +408,7 @@ static void drawPlayButtons(const Game& g) {
 
 // ---------------------------------------------------------------- interfaz tactil (como el juego original)
 static bool loadLvl(Game& g, int i) { bool ok = g.loadLevel(i); if (ok) g.startIntro(); return ok; }       // cargar un nivel con la animacion de inicio
+static float g_camMsgT = 0.f;       // aviso de la distancia de camara (R3)
 static bool g_paused = false, g_trash = false, g_idea = false;        // menu de pausa abierto / modo tacho (X sobre una casilla borra)
 static void thickLine(float x1, float y1, float x2, float y2, float th, u64 col) {
     float dx = x2 - x1, dy = y2 - y1, l = sqrtf(dx * dx + dy * dy); if (l < 0.01f) return;
@@ -415,9 +416,10 @@ static void thickLine(float x1, float y1, float x2, float y2, float th, u64 col)
     tri(x1 + nx, y1 + ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, col); tri(x1 + nx, y1 + ny, x2 - nx, y2 - ny, x1 - nx, y1 - ny, col);
 }
 static void roundButton(float cx, float cy, float r, bool blue, bool hot, bool dim = false) {
+    if (hot) r *= 1.15f;                                         // al apuntarlo el boton se agranda, como en el juego original
     disc(cx, cy, r, dim ? rgba(0x50, 0x60, 0x70, 0x80) : (blue ? rgba(0x2F, 0x84, 0xDE, 0x80) : rgba(0x6C, 0xBF, 0x3A, 0x80)));
     ring(cx, cy, r, 3.f, dim ? rgba(0x90, 0xA0, 0xB0, 0x80) : (blue ? rgba(0xB8, 0xE0, 0xFF, 0x80) : rgba(0x3A, 0x7A, 0x22, 0x80)));
-    if (hot) ring(cx, cy, r + 6.f, 3.f, rgba(0xFF, 0xE0, 0x20, 0x80));
+    if (hot) ring(cx, cy, r + 3.f, 2.f, rgba(0xFF, 0xF0, 0x80, 0x60));
 }
 static void glyphPause(float cx, float cy) { u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80); rect(cx - 9, cy - 11, cx - 3, cy + 11, w); rect(cx + 3, cy - 11, cx + 9, cy + 11, w); }
 static void glyphRestart(float cx, float cy) { u64 w = rgba(0xFF, 0xFF, 0xFF, 0x80); ring(cx, cy, 11.f, 4.f, w); tri(cx + 4, cy - 17, cx + 4, cy - 5, cx + 15, cy - 11, w); }
@@ -782,7 +784,7 @@ static void drawGameUI(const Game& g) {
         else if (g.isSandbox()) textCentered(false, 320, 408, "Círculo: volver a construir   Stick derecho: cámara", 0.62f, 255, 255, 255);
         if (g.isSandbox()) {
             char b2[48];
-            if (g.fanCount() > 0) textLeft(30, 48, g.fansOn() ? "Ventilador: ENCENDIDO" : "Ventilador: APAGADO", 0.75f, g.fansOn() ? 150 : 255, g.fansOn() ? 255 : 150, 150);
+            if (g.fanCount() > 0) textLeft(86, 48, g.fansOn() ? "Ventilador: ENCENDIDO" : "Ventilador: APAGADO", 0.75f, g.fansOn() ? 150 : 255, g.fansOn() ? 255 : 150, 150);
             if (g.balloonsLeft() > 0) { snprintf(b2, sizeof(b2), "Globos: %d", g.balloonsLeft()); textLeft(30, 72, b2, 0.75f, 255, 200, 200); }
         }
         else if (g.time() < 5.f && !anyDev) textCentered(false, 320, 408, "Stick derecho: mover la cámara", 0.7f, 255, 255, 255);
@@ -897,7 +899,7 @@ int main(int, char**) {
             }
         }
         pad = np;
-        clock += dt; g_clock = clock;
+        clock += dt; g_clock = clock; if (g_camMsgT > 0.f) g_camMsgT -= dt;
         if (saveMsgTimer > 0) saveMsgTimer -= dt;
         if (msgTimer > 0) msgTimer -= dt;
         bool pX = pad.edge & PAD_CROSS, pO = pad.edge & PAD_CIRCLE, pT = pad.edge & PAD_TRIANGLE, pS = pad.edge & PAD_SQUARE, pStart = pad.edge & PAD_START;
@@ -1013,6 +1015,7 @@ int main(int, char**) {
                 if (gcy > SCREEN_H) { gcy = SCREEN_H; }
             }
             const bool selEdge = pad.edge & PAD_SELECT, l2Edge = pad.edge & PAD_L2;      // SELECT: libro de ideas, L2: visor (ambos modos)
+            if ((pad.edge & PAD_R3) && !g_paused) { game.cycleCamera(); g_camMsgT = 1.8f; }               // R3: normal / lejos / cerca
             if (game.introActive()) { if (pX || cX || pStart) game.skipIntro(); else game.update(dt, GameInput()); handled = true; }
             else if (selEdge && !g_paused && !game.viewer() && !endPanel && (game.mode() == M_BUILD || game.mode() == M_PLAY)) {
                 g_idea = !g_idea; if (g_idea) { gcx = 530.f; gcy = 60.f; } handled = true;
@@ -1232,11 +1235,12 @@ int main(int, char**) {
             static DrawItem items[768]; int n = game.drawList(items, 768);
             for (int i = 0; i < n; i++) {
                 float sx, sy; worldToScreen(game, items[i].x, items[i].y, sx, sy);
-                if (items[i].type == P_FAN) { float cs = 31.f * game.zoomNow() * 0.98f; sprite(texDecor[DEC_FAN], sx, sy, cs, cs, items[i].angle); continue; }
+                if (items[i].type == P_FAN) { float k = 31.f * game.zoomNow() * 0.98f / (float)texDecor[DEC_FAN].Height; sprite(texDecor[DEC_FAN], sx, sy, texDecor[DEC_FAN].Width * k, texDecor[DEC_FAN].Height * k, items[i].angle); continue; }      // el ventilador conserva su forma (no ocupa toda la casilla)
                 if (items[i].type == P_BLOWER) { float k = 31.f * game.zoomNow() * 0.98f / (float)texDecor[DEC_BLOWER].Height; sprite(texDecor[DEC_BLOWER], sx, sy, texDecor[DEC_BLOWER].Width * k, texDecor[DEC_BLOWER].Height * k, items[i].angle); continue; }
                 spriteOf(items[i].type, sx, sy, (items[i].type == P_PIG ? 0.8f : (items[i].type == P_FAN ? 0.9f : 1.f)) * (game.zoomNow() / ZOOM), items[i].angle);
             }
             drawGameUI(game);
+            if (g_camMsgT > 0.f) { static const char* CN[3] = { "Cámara: normal", "Cámara: lejos", "Cámara: cerca" }; textCentered(false, 320, 64, CN[game.cameraLevel()], 0.8f, 255, 255, 255); }
             if (optTouch && !g_paused && !g_idea && !game.introActive()) { float hx = gcx, hy = gcy; if (game.mode() == M_BUILD && !game.viewer()) game.cursor(hx, hy); drawTouchHud(game, hx, hy); }
             if (game.viewer()) { rect(0, 404, SCREEN_W, 440, rgba(0x00, 0x00, 0x00, 0x60)); textCentered(false, 320, 410, optTouch ? "Visor: tocá la lupa para volver" : "Visor: L2 o Círculo para volver", 0.7f, 255, 255, 255); }
             if (g_paused) drawPauseMenu(game);

@@ -43,6 +43,7 @@ public:
     std::vector<Seg> segs;                    // aristas del terreno: los globos revientan al tocarlo
     static constexpr float FAN_N = 2.0f;      // empuje de cada ventilador (newtons): suave, como en el video del original (antes 6.0)
     bool popped[MAXR][MAXC];
+    int camLevel = 0;
     float introT = 0.f; static constexpr float INTRO_T = 2.2f;   // animacion de inicio: la camara muestra la meta y vuelve a la rejilla
     int balN[MAXR][MAXC];                                      // globos que le quedan a cada objeto de globos (1 o 2)
     static bool isBal(int tp) { return tp == P_BALLOON || tp == P_BALLOON2; }
@@ -71,7 +72,8 @@ public:
     }
     float zoom() const {                      // al construir se aleja lo necesario para que entre toda la rejilla
         if (viewerOn) return vz;
-        if (mode != M_BUILD) return ZOOM;
+        static const float CAMF[3] = { 1.0f, 0.6f, 1.45f };
+        if (mode != M_BUILD) return ZOOM * CAMF[camLevel];       // R3 cambia entre 3 distancias de camara: normal, lejos, cerca
         float z = 420.f / ((float)cols() * CELL);       // deja lugar a los botones del costado
         return z < ZOOM ? z : ZOOM;
     }
@@ -439,6 +441,8 @@ void Game::update(float dt, const GameInput& in) { g->update(dt, in); }
 int Game::drawList(DrawItem* out, int max) const { return g->draw(out, max); }
 Mode Game::mode() const { return g->mode; }
 void Game::cursor(float& x, float& y) const { x = g->cx; y = g->cy; }
+void Game::cycleCamera() { g->camLevel = (g->camLevel + 1) % 3; }
+int Game::cameraLevel() const { return g->camLevel; }
 void Game::startIntro() { if (g->mode == M_BUILD && !(g->L->flags & 1)) g->introT = GameImpl::INTRO_T; }
 void Game::skipIntro() { g->introT = 0.f; }
 bool Game::introActive() const { return g->introT > 0.f; }
